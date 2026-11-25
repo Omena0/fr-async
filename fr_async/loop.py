@@ -11,7 +11,7 @@ import socket
 import heapq
 import time
 
-lazy from .messages import Message, BackgroundMessage, Messages, AsCompleted
+lazy from .messages import Message, BackgroundMessage, Messages, AsCompleted, Accept
 lazy from .classes import Task, Yieldable
 lazy from .scheduler import BaseScheduler
 lazy from .utils import log
@@ -110,6 +110,9 @@ class ExecutionLoop:
             if message.is_resolved():
                 self.pending -= 1
                 del key.data[message]
+
+                if isinstance(message, Accept):
+                    task.return_value(message.result)
 
                 if task.is_ready:
                     self.schedule(task)

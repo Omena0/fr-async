@@ -151,6 +151,32 @@ class WaitWritable(MessageWithSocket, YieldTypeIs[ReturnsAfter[None]]):
         'Register the socket for write readiness.'
         register_event(self, task, selectors.EVENT_WRITE)
 
+class Accept(MessageWithSocket, YieldTypeIs[ReturnsAfter[None, tuple[socket.socket, Any]]]):
+    """Accept one client connection without blocking the event loop."""
+    _type = 'register'
+    _reg_type = 'socket'
+
+    def __init__(self, sock: socket.socket, *, background: bool = False):
+        """Create an accept message for a listening socket."""
+        super().__init__(background=background)
+        self.socket = sock
+        self.result: tuple[socket.socket, Any] | None = None
+
+    def register(self, task: Task) -> None:
+        """Make the listener nonblocking and register it for readability."""
+        self.socket.setblocking(False)
+        register_event(self, task, selectors.EVENT_READ)
+
+    def resolve(self, events: list[Any]) -> None:
+        """Accept a ready connection and resolve with its socket and address."""
+        try:
+            client, address = self.socket.accept()
+        except BlockingIOError:
+            return
+        client.setblocking(False)
+        self.result = (client, address)
+        super().resolve(events)
+
 # Send to thread (for blocking tasks)
 class ToThread[T, **P](BackgroundMessage, YieldTypeIs[T]):
     'Run a callable in the event loop thread pool and return its result.'
@@ -386,6 +412,7 @@ __all__ = [
     'Sleep',
     'WaitReadable',
     'WaitWritable',
+    'Accept',
     'ToThread',
     'AsCompleted',
     'TaskJoin',
