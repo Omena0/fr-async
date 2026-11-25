@@ -1,0 +1,4 @@
+
+# Exceptions
+class NoEventLoopException(Exception): ...
+
