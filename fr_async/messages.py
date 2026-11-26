@@ -40,7 +40,7 @@ def register_event(self: MessageWithSocket, task: Task, event: int):
         _loop.selector.modify(self.socket, event, old | {self: task})
 
 # Event loop messaging base classes
-class Message(YieldTypeIs[Any]):
+class Message:
     """Base class for values yielded to the event loop to request an operation."""
     _type = 'None'
     _reg_type = 'None'
@@ -151,7 +151,7 @@ class WaitWritable(MessageWithSocket, YieldTypeIs[ReturnsAfter[None]]):
         'Register the socket for write readiness.'
         register_event(self, task, selectors.EVENT_WRITE)
 
-class Accept(MessageWithSocket, YieldTypeIs[ReturnsAfter[None, tuple[socket.socket, Any]]]):
+class Accept(MessageWithSocket, YieldTypeIs[ReturnsAfter[None, tuple[socket.socket, tuple[str, int]]]]):
     """Accept one client connection without blocking the event loop."""
     _type = 'register'
     _reg_type = 'socket'
