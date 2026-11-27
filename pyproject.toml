@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Async but with yield instead of await"
 readme = "README.md"
 requires-python = ">=3.15"
-license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
+license = "PolyForm-Noncommercial-1.0.0"
 license-files = ["LICENSE.md"]
 authors = [
     {name = "Omena0", email = "omena0mc@gmail.com"},
@@ -33,7 +33,7 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/Omena0/fr-async"
+Documentation = "https://omena0.dev/fr-async"
 Repository = "https://github.com/Omena0/fr-async"
 Issues = "https://github.com/Omena0/fr-async/issues"
 
