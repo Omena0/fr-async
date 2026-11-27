@@ -1,6 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor, Future
 from typing import Any, Generator, Type, cast
-from .exceptions import NoEventLoopException
+from .exceptions import NoEventLoopException, TaskTimeoutError
 from contextlib import contextmanager
 from selectors import SelectorKey
 from collections import deque
@@ -11,7 +11,7 @@ import socket
 import heapq
 import time
 
-lazy from .messages import Message, BackgroundMessage, Messages, AsCompleted, Accept
+lazy from .messages import Message, BackgroundMessage, MessageWithSocket, Messages, AsCompleted, Accept
 lazy from .classes import Task, Yieldable
 lazy from .scheduler import BaseScheduler
 lazy from .utils import log
@@ -19,30 +19,35 @@ lazy from .utils import log
 class _DequeScheduler(BaseScheduler):
     def __init__(self):
         self.tasks: deque[Task] = deque()
+        self._queued: set[Task] = set()
 
     def add(self, task, *, immediate=False):
-        if task in self.tasks:
+        if task in self._queued:
             if immediate:
                 self.tasks.remove(task)
                 self.tasks.appendleft(task)
             return
 
+        self._queued.add(task)
         if immediate:
             self.tasks.appendleft(task)
         else:
             self.tasks.append(task)
 
     def pop(self) -> Task:
-        return self.tasks.popleft()
+        task = self.tasks.popleft()
+        self._queued.remove(task)
+        return task
 
     def remove(self, task):
         self.tasks.remove(task)
+        self._queued.remove(task)
 
     def account(self, task, runtime):
         pass
 
     def __contains__(self, task: Task) -> bool:
-        return task in self.tasks
+        return task in self._queued
 
     def __bool__(self) -> bool:
         return bool(self.tasks)
@@ -72,11 +77,13 @@ class ExecutionLoop:
 
         self.running_tasks: set[Task] = set()
 
-        self.timers: list[tuple[float, int, Message, Task]] = []
+        self.timers: list[tuple[float, int, Message | None, Task]] = []
         self._timer_id = itertools.count()
 
         self.executor = ThreadPoolExecutor()
         self.completed: SimpleQueue[tuple[Message, Task, Future[Any]]] = SimpleQueue()
+        self.abandoned_completions: dict[tuple[Message, Task], int] = {}
+        self._has_timed_out_work = False
 
         self.wakeup_r, self.wakeup_w = socket.socketpair()
         self.wakeup_r.setblocking(False)
@@ -91,11 +98,114 @@ class ExecutionLoop:
         now = time.monotonic()
 
         while self.timers and self.timers[0][0] <= now:
-            _deadline, _sequence, _msg, task = heapq.heappop(self.timers)
+            deadline, _sequence, message, task = heapq.heappop(self.timers)
+
+            if message is None and task._timeout_deadline != deadline:
+                continue
+
             self.pending -= 1
+
+            if message is None:
+                task._timeout_deadline = None
+                self._expire_task(task)
+                continue
 
             if task.is_ready:
                 self.schedule(task)
+
+    def _discard_stale_timeout_timers(self) -> None:
+        while self.timers:
+            deadline, _sequence, message, task = self.timers[0]
+            if message is not None or task._timeout_deadline == deadline:
+                return
+            heapq.heappop(self.timers)
+
+    def _start_task_timeout(self, task: Task) -> None:
+        if task.timeout is None or task._timeout_started or task.done:
+            return
+
+        task._timeout_started = True
+        deadline = time.monotonic() + task.timeout
+        task._timeout_deadline = deadline
+        heapq.heappush(
+            self.timers,
+            (deadline, next(self._timer_id), None, task),
+        )
+        self.pending += 1
+
+    def _clear_task_timeout(self, task: Task) -> None:
+        if task._timeout_deadline is None:
+            return
+
+        task._timeout_deadline = None
+        self.pending -= 1
+
+    def _expire_task(self, task: Task) -> None:
+        if task.done or task._timeout_expired:
+            return
+
+        task._timeout_expired = True
+        self._cancel_task_waits(task)
+        task.throw_value(TaskTimeoutError(f'{task!r} exceeded its {task.timeout}s timeout'))
+        self.schedule(task, immediate=True)
+
+    def _cancel_task_waits(self, task: Task) -> None:
+        for message in tuple(task.wait_for):
+            self._remove_timer_wait(message, task)
+            self._remove_socket_wait(message)
+            self._remove_join_wait(message, task)
+
+            remaining = message._pending_count
+            if remaining:
+                if message._reg_type in ('execute', 'as_completed'):
+                    key = (message, task)
+                    self.abandoned_completions[key] = self.abandoned_completions.get(key, 0) + remaining
+                    self._has_timed_out_work = True
+                self.pending -= remaining
+                message._pending_count = 0
+
+            message.resolve([])
+
+        task.wait_for.clear()
+
+    def _remove_timer_wait(self, message: Message, task: Task) -> None:
+        kept = [entry for entry in self.timers if not (entry[2] is message and entry[3] is task)]
+        removed = len(self.timers) - len(kept)
+        if removed:
+            self.timers = kept
+            heapq.heapify(self.timers)
+
+    def _remove_socket_wait(self, message: Message) -> None:
+        if not isinstance(message, MessageWithSocket):
+            return
+
+        try:
+            key = self.selector.get_key(message.socket)
+        except KeyError:
+            return
+
+        data = key.data
+        if not isinstance(data, dict) or message not in data:
+            return
+        data = dict(cast(dict[Any, Any], data))
+        del data[message]
+        if data:
+            self.selector.modify(key.fileobj, key.events, data)
+        else:
+            self.selector.unregister(key.fileobj)
+
+    @staticmethod
+    def _remove_join_wait(message: Message, task: Task) -> None:
+        targets = getattr(message, 'targets', ())
+        target = getattr(message, 'target', None)
+        if target is not None:
+            targets = (*targets, target)
+        for joined_task in targets:
+            if hasattr(joined_task, '_joiners'):
+                joined_task._joiners[:] = [
+                    joiner for joiner in joined_task._joiners
+                    if joiner != (message, task)
+                ]
 
     def process_event(self, key: SelectorKey, event: int):
         # Thread
@@ -124,6 +234,7 @@ class ExecutionLoop:
         if self.scheduler:
             return
 
+        self._discard_stale_timeout_timers()
         timeout = None
         if self.timers:
             timeout = max(0, self.timers[0][0] - time.monotonic())
@@ -153,6 +264,7 @@ class ExecutionLoop:
 
     def run_one(self):
         task = self.scheduler.pop()
+        self._start_task_timeout(task)
 
         frame = {"paused": 0.0}
         self._run_frames.append(frame)
@@ -162,6 +274,11 @@ class ExecutionLoop:
 
         try:
             result = self.run_task(task)
+        except BaseException as exc:
+            task.done = True
+            task.exception = exc
+            task.result = None
+            result = _NOTREADY
         finally:
             runtime = max(
                 0.0,
@@ -172,6 +289,31 @@ class ExecutionLoop:
             self._run_frames.pop()
 
             self.scheduler.account(task, runtime)
+
+        deadline = task._timeout_deadline
+        timed_out_now = deadline is not None and time.monotonic() >= deadline
+        if timed_out_now and not task._timeout_expired:
+            self._clear_task_timeout(task)
+            timeout_error = TaskTimeoutError(f'{task!r} exceeded its {task.timeout}s timeout')
+            if task.done:
+                task._timeout_expired = True
+                task.exception = timeout_error
+                task.result = None
+            else:
+                self._expire_task(task)
+                self.schedule(task, immediate=True)
+                result = _NOTREADY
+        elif task._timeout_expired:
+            timeout_error = TaskTimeoutError(f'{task!r} exceeded its {task.timeout}s timeout')
+            if task.done:
+                task.exception = timeout_error
+                task.result = None
+            else:
+                self.schedule(task, immediate=True)
+                result = _NOTREADY
+
+        if task.done:
+            self._clear_task_timeout(task)
 
         parent = task.parent
 
@@ -188,6 +330,14 @@ class ExecutionLoop:
             task._joiners.clear()
 
         if parent is task and task.done:
+            if task.exception is not None:
+                raise task.exception
+            return
+
+        if task.exception is not None:
+            if parent is not None:
+                parent.throw_value(task.exception)
+                self.schedule(parent, parent.parent, immediate=True)
             return
 
         if result is _NOTREADY:
@@ -200,12 +350,12 @@ class ExecutionLoop:
             log(f'{result.immediate=}')
             log(f'{result.background=}')
             if result.background:
-                self.schedule(result, immediate=result.immediate)
+                self.schedule(cast(Task[Any], result), immediate=result.immediate)
                 task.return_value(result)
                 self.schedule(task, task.parent, immediate=True)
                 return
             else:
-                self.schedule(result, task, immediate=result.immediate)
+                self.schedule(cast(Task[Any], result), task, immediate=result.immediate)
             return
 
         if isinstance(result, Message):
@@ -240,7 +390,7 @@ class ExecutionLoop:
                 if self.scheduler:
                     self.run_one()
                 else:
-                    if not self.timers and not self.pending:
+                    if not self.pending:
                         break
                     self.poll()
 
@@ -299,8 +449,18 @@ class ExecutionLoop:
         while not self.completed.empty():
             message, task, future = self.completed.get()
 
+            abandoned_key = (message, task)
+            abandoned_count = self.abandoned_completions.get(abandoned_key, 0)
+            if abandoned_count:
+                if abandoned_count == 1:
+                    del self.abandoned_completions[abandoned_key]
+                else:
+                    self.abandoned_completions[abandoned_key] = abandoned_count - 1
+                continue
+
             if message._reg_type == 'as_completed':
                 self.pending -= 1
+                message._pending_count -= 1
 
                 message = cast(AsCompleted[Any], message)
 
@@ -319,6 +479,7 @@ class ExecutionLoop:
 
             message.resolve([])
             self.pending -= 1
+            message._pending_count -= 1
 
             if task.is_ready:
                 self.schedule(task)
@@ -332,7 +493,7 @@ class ExecutionLoop:
             pass
 
     def shutdown(self):
-        self.executor.shutdown(wait=True)
+        self.executor.shutdown(wait=not self._has_timed_out_work, cancel_futures=self._has_timed_out_work)
 
 def getEventLoop():
     if not _loop:

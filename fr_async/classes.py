@@ -1,4 +1,5 @@
-from typing import Generator, Callable, Any, TypeIs, Literal, IO, Final, overload
+from typing import Generator, Callable, Any, TypeIs, Literal, IO, Final, overload, Self
+from contextvars import Context, copy_context
 from collections import deque
 from os import PathLike
 import inspect
@@ -10,11 +11,15 @@ lazy from .utils import log
 
 class _Missing:
     """Sentinel type used to distinguish a missing value."""
+    __slots__ = ()
+
     ...
 _MISSING = _Missing()
 
 class Assignable:
     'Store arbitrary data and expose entries as attributes.'
+    __slots__ = ('_data',)
+
     def __init__(self) -> None:
         'Create an empty attribute store.'
         self._data: dict[Any, Any] = {}
@@ -42,10 +47,20 @@ def _is_generator(x: Any) -> TypeIs[Generator[Any, Any, Any]]:
     return inspect.isgenerator(x)
 
 # Tasks
-class Task:
+class Task[T=Any]:
     'Represent a callable or generator managed by the event loop.'
-    def __init__(self, func: Generator[Any, Any, Any] | Callable[..., Any], *args: Any, background=False, immediate=False, parent: Task | None = None, data: dict[Any, Any] | None = None, **kwargs: Any):
-        'Initialize task execution state, arguments, parent, and scheduling options.'
+    __slots__ = (
+        'func', 'immediate', 'background', 'args', 'kwargs', 'parent', 'done',
+        'result', 'exception', 'timeout', '_timeout_deadline',
+        '_timeout_started', '_timeout_expired', '_joiners', 'data',
+        '_stop_requested', '_return_val', '_throw_val', 'wait_for', '_context',
+    )
+
+    def __init__(self, func: Generator[Any, Any, T] | Callable[..., T], *args: Any, background=False, immediate=False, parent: Task | None = None, data: dict[Any, Any] | None = None, timeout: float | None = None, **kwargs: Any):
+        'Initialize the task and its optional timeout, measured from its first run.'
+        if timeout is not None and timeout < 0:
+            raise ValueError('Task timeout must be non-negative.')
+
         self.func: Generator[Any, Any, Any] | Callable[..., Any] = func
         self.immediate = immediate
         self.background = background
@@ -56,6 +71,11 @@ class Task:
         self.parent: Task | None = parent
         self.done = False
         self.result: Any = None
+        self.exception: BaseException | None = None
+        self.timeout = timeout
+        self._timeout_deadline: float | None = None
+        self._timeout_started = False
+        self._timeout_expired = False
         self._joiners: list[tuple[Message, Task]] = []
 
         self.data = Assignable()
@@ -66,8 +86,9 @@ class Task:
         self._throw_val: Any = _MISSING
 
         self.wait_for: deque[Message] = deque()
+        self._context: Context = copy_context()
 
-    def __call__(self) -> Any:
+    def __call__(self) -> T | None:
         'Advance the generator or invoke the callable and return its yielded value.'
         if self._stop_requested:
             if _is_generator(self.func):
@@ -82,6 +103,7 @@ class Task:
                 if isinstance(self._throw_val, BaseException):
                     exc = self._throw_val
                     self._throw_val = _MISSING
+                    self._timeout_expired = False
                     return self.func.throw(exc)
 
                 if self._return_val is not _MISSING:
@@ -124,23 +146,25 @@ class Task:
         'Request that the task stop when it next runs.'
         self._stop_requested = True
 
-    def join(self, *, background: bool = False) -> TaskJoin[Any]:
+    def join(self, *, background: bool = False) -> TaskJoin[T]:
         """Wait for this task to finish and return its result."""
         return TaskJoin(self, background=background)
 
 # Task factory function wrapper
 class Yieldable:
     'Wrap a callable so it can be converted into an event loop task.'
+    __slots__ = ('func',)
+
     def __init__(self, func: Callable[..., Any]):
         'Store the callable to wrap.'
         self.func = func
 
-    def __call__(self, /, *args: Any, background: bool=False, immediate=False, data: dict[Any, Any] | None = None, **kwargs: Any) -> Task:
-        'Create a task with the supplied arguments and scheduling options.'
+    def __call__(self, /, *args: Any, background: bool=False, immediate=False, data: dict[Any, Any] | None = None, timeout: float | None = None, **kwargs: Any) -> Task:
+        'Create a task with scheduling options and an optional first-run timeout.'
         if inspect.isgeneratorfunction(self.func):
-            return Task(self.func(*args, **kwargs), background=background, immediate=immediate)
+            return Task(self.func(*args, **kwargs), background=background, immediate=immediate, timeout=timeout)
 
-        return Task(self.func, background=background, immediate=immediate, data=data, *args, **kwargs)
+        return Task(self.func, background=background, immediate=immediate, data=data, timeout=timeout, *args, **kwargs)
 
     def __repr__(self) -> str:
         'Return a readable representation of the wrapped callable.'
@@ -154,6 +178,8 @@ type OpenMode = OpenTextMode | OpenBinaryMode
 
 class File[T: (str, bytes)]:
     'Wrap a text or binary file and expose event loop file operations.'
+    __slots__ = ('_file', '_binary')
+
     @overload
     def __init__(
             self: File[bytes],
@@ -213,9 +239,17 @@ class File[T: (str, bytes)]:
         'Remove the file from the filesystem.'
         os.remove(self._file.name)
 
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *_):
+        self._file.close()
+
 # Task group
 class TaskGroup:
     'Collect tasks for coordinated scheduling, cancellation, and result handling.'
+    __slots__ = ('tasks', 'started')
+
     def __init__(self) -> None:
         'Create an empty task group that has not started.'
         self.tasks: list[Task] = []
@@ -225,9 +259,12 @@ class TaskGroup:
         'Add a task, scheduling it if a started group autoruns additions.'
         if task in self.tasks:
             return task
+
         self.tasks.append(task)
+
         if autorun and self.started and not task.done:
             getEventLoop().schedule(task)
+
         return task
 
     def collect(self, *, background: bool = False) -> TaskGroupCollect[Any]:

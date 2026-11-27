@@ -1,12 +1,13 @@
 from dataclasses import dataclass
+from fr_async.classes import Task
 from math import exp, isfinite
 from itertools import count
 from typing import Any
 import time
 
-lazy from .classes import Task
-
 class BaseScheduler:
+    __slots__ = ()
+
     def __bool__(self) -> bool: ...
     def __contains__(self, item: Any) -> bool: ...
     def __len__(self) -> int: ...
@@ -31,6 +32,11 @@ class _Entity:
     inactive_since: float | None = None
 
 class EEVDFScheduler(BaseScheduler):
+    __slots__ = (
+        'default_slice', 'sleep_decay', '_entities', '_queued', '_sequence',
+        '_vtime', '_queued_weight', '_queued_weighted_runtime', '_immediate',
+    )
+
     def __init__(
         self,
         *,
@@ -53,6 +59,9 @@ class EEVDFScheduler(BaseScheduler):
 
         self._sequence = count()
         self._vtime = 0.0
+        self._queued_weight = 0.0
+        self._queued_weighted_runtime = 0.0
+        self._immediate: list[tuple[int, Task]] = []
 
     def __contains__(self, task: Task) -> bool:
         return task in self._queued
@@ -80,12 +89,8 @@ class EEVDFScheduler(BaseScheduler):
         self,
         extra: _Entity | None = None,
     ) -> tuple[float, float]:
-        weighted_runtime = 0.0
-        total_weight = 0.0
-
-        for entity in self._queued.values():
-            weighted_runtime += entity.vruntime * entity.weight
-            total_weight += entity.weight
+        weighted_runtime = self._queued_weighted_runtime
+        total_weight = self._queued_weight
 
         if extra is not None:
             weighted_runtime += extra.vruntime * extra.weight
@@ -132,6 +137,7 @@ class EEVDFScheduler(BaseScheduler):
             if immediate:
                 entry.immediate = True
                 entry.sequence = next(self._sequence)
+                self._immediate.append((entry.sequence, task))
             return
 
         else:
@@ -173,42 +179,72 @@ class EEVDFScheduler(BaseScheduler):
         entry.immediate = immediate
 
         self._queued[task] = entry
+        self._queued_weight += entry.weight
+        self._queued_weighted_runtime += entry.vruntime * entry.weight
+        if immediate:
+            self._immediate.append((entry.sequence, task))
 
     def pop(self) -> Task:
         if not self._queued:
             raise IndexError("pop from empty scheduler")
 
-        # Preserve the explicit immediate scheduling override.
-        urgent = [
-            (entry.sequence, task)
-            for task, entry in self._queued.items()
-            if entry.immediate
-        ]
+        urgent_task: Task | None = None
+        while self._immediate:
+            sequence, queued_task = self._immediate[-1]
+            entry = self._queued.get(queued_task)
+            if (
+                entry is None
+                or not entry.immediate
+                or entry.sequence != sequence
+            ):
+                self._immediate.pop()
+                continue
 
-        if urgent:
-            _, task = max(urgent)
+            self._immediate.pop()
+            urgent_task = queued_task
+            break
+
+        if urgent_task is not None:
+            task = urgent_task
         else:
             vruntime, _ = self._average()
+            eligible_task: Task | None = None
+            eligible_deadline = 0.0
+            eligible_sequence = 0
+            fallback_task: Task | None = None
+            fallback_deadline = 0.0
+            fallback_sequence = 0
 
-            eligible = [
-                (task, entry)
-                for task, entry in self._queued.items()
-                if entry.vruntime <= vruntime
-            ]
+            for queued_task, entry in list(self._queued.items()):
+                if fallback_task is None or (
+                    entry.deadline < fallback_deadline
+                    or (
+                        entry.deadline == fallback_deadline
+                        and entry.sequence < fallback_sequence
+                    )
+                ):
+                    fallback_task = queued_task
+                    fallback_deadline = entry.deadline
+                    fallback_sequence = entry.sequence
 
-            # Floating-point fallback.
-            if not eligible:
-                eligible = list(self._queued.items())
+                if entry.vruntime <= vruntime and (
+                    eligible_task is None
+                    or entry.deadline < eligible_deadline
+                    or (
+                        entry.deadline == eligible_deadline
+                        and entry.sequence < eligible_sequence
+                    )
+                ):
+                    eligible_task = queued_task
+                    eligible_deadline = entry.deadline
+                    eligible_sequence = entry.sequence
 
-            task, _ = min(
-                eligible,
-                key=lambda item: (
-                    item[1].deadline,
-                    item[1].sequence,
-                ),
-            )
+            task = eligible_task or fallback_task
+        assert task is not None
 
         entry = self._queued.pop(task)
+        self._queued_weight -= entry.weight
+        self._queued_weighted_runtime -= entry.vruntime * entry.weight
         entry.immediate = False
 
         return task
@@ -225,6 +261,8 @@ class EEVDFScheduler(BaseScheduler):
 
         self._vtime = vruntime
         del self._queued[task]
+        self._queued_weight -= entry.weight
+        self._queued_weighted_runtime -= entry.vruntime * entry.weight
 
     def account(self, task: Task, runtime: float):
         """Account for the time a task spent executing."""

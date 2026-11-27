@@ -19,8 +19,8 @@ from .messages import (
 # Configuration
 # ------------------------------------------------------------
 
-MAX_LATENESS = 0.150
-MAX_FAIRNESS_LATENESS = 0.075
+MAX_LATENESS = 0.004
+MAX_FAIRNESS_LATENESS = 0.0025
 
 PASSED: list[str] = []
 METRICS: dict[str, tuple[float, float, float, float]] = {}
@@ -110,7 +110,7 @@ def calculate_score() -> float:
 
 def print_score() -> None:
     print()
-    print("Performance metrics")
+    print("Performance metrics (target = 0 ms)")
 
     total_weight = sum(weight for _, _, _, weight in METRICS.values())
 
@@ -121,7 +121,7 @@ def print_score() -> None:
         print(
             f"  {name:>40}: {score:>6.2f}% "
             f"(weight={weight:<03}, contribution={contribution:<04.1f}%, "
-            f"value={ms(value):<06}, target={ms(target)}, limit={ms(limit):<06})"
+            f"overhead={ms(value):<06}, imit={ms(limit):<06})"
         )
 
     print()
@@ -260,7 +260,7 @@ def test_sleep_accuracy() -> Generator[Any, Any, None]:
     record_metric(
         "timer maximum lateness",
         max(0.0, maximum),
-        target=0.00025,
+        target=0.0,
         limit=MAX_LATENESS,
         weight=2.0,
     )
@@ -304,7 +304,7 @@ def test_periodic_timing() -> Generator[Any, Any, None]:
     record_metric(
         "periodic timer maximum lateness",
         max(0.0, maximum),
-        target=0.0005,
+        target=0.0,
         limit=MAX_LATENESS,
         weight=1.5,
     )
@@ -340,7 +340,7 @@ def test_multiple_blockers() -> Generator[Any, Any, None]:
     record_metric(
         "multiple-blocker overhead",
         max(0.0, elapsed - max(delays)),
-        target=0.00025,
+        target=0.0,
         limit=MAX_LATENESS,
     )
 
@@ -393,7 +393,7 @@ def test_concurrent_timers() -> Generator[Any, Any, None]:
     record_metric(
         "concurrent timer maximum lateness",
         max(0.0, maximum),
-        target=0.00075,
+        target=0.0,
         limit=MAX_LATENESS,
         weight=1.5,
     )
@@ -439,7 +439,7 @@ def test_thread_wakeups() -> Generator[Any, Any, None]:
     record_metric(
         "timer lateness during thread wakeups",
         max(0.0, elapsed - 0.14),
-        target=0.00050,
+        target=0.0,
         limit=MAX_LATENESS,
     )
 
@@ -477,7 +477,7 @@ def test_socket_events() -> Generator[Any, Any, None]:
         record_metric(
             "socket readiness lateness",
             max(0.0, elapsed - 0.04),
-            target=0.00050,
+            target=0.0,
             limit=MAX_LATENESS,
         )
     finally:
@@ -538,7 +538,7 @@ def test_as_completed() -> Generator[Any, Any, None]:
     record_metric(
         "AsCompleted completion overhead",
         max(0.0, elapsed - 0.24),
-        target=0.00050,
+        target=0.0,
         limit=MAX_LATENESS,
     )
 
@@ -650,8 +650,8 @@ def test_background_stop() -> Generator[Any, Any, None]:
     record_metric(
         "background stop latency",
         latency,
-        target=0.00100,
-        limit=0.15,
+        target=0.0,
+        limit=0.0005,
     )
 
     report(
@@ -691,7 +691,7 @@ def test_ready_queue_fairness() -> Generator[Any, Any, None]:
     record_metric(
         "ready-queue timer lateness",
         lateness,
-        target=0.00050,
+        target=0.0,
         limit=MAX_FAIRNESS_LATENESS,
         weight=2.0,
     )
@@ -785,7 +785,7 @@ def test_sleep_fanout() -> Generator[Any, Any, None]:
     record_metric(
         "64-timer fan-out lateness",
         max(0.0, maximum),
-        target=0.00100,
+        target=0.0,
         limit=MAX_LATENESS,
     )
 
@@ -821,7 +821,7 @@ def test_mixed_message_blockers() -> Generator[Any, Any, None]:
     record_metric(
         "mixed blocker overhead",
         max(0.0, elapsed - 0.045),
-        target=0.00050,
+        target=0.0,
         limit=MAX_LATENESS,
     )
 
@@ -1027,11 +1027,13 @@ def test_thread_parallelism() -> Generator[Any, Any, None]:
         f"Thread operations appear serialized: {ms(elapsed)}",
     )
 
+    overhead = elapsed - delay
+
     record_metric(
         "four-thread parallel execution",
-        elapsed,
-        target=0.08500,
-        limit=0.10,
+        overhead,
+        target=0,
+        limit=0.002,
         weight=1.5,
     )
 
@@ -1081,11 +1083,13 @@ def test_as_completed_first_result() -> Generator[Any, Any, None]:
         f"{ms(first_result_latency)}",
     )
 
+    overhead = first_result_latency - 0.02
+
     record_metric(
         "AsCompleted first-result latency",
-        first_result_latency,
-        target=0.02100,
-        limit=0.050,
+        overhead,
+        target=0,
+        limit=0.002,
         weight=1.5,
     )
 
@@ -1109,12 +1113,12 @@ def test_as_completed_batch() -> Generator[Any, Any, None]:
 
     start = time.monotonic()
 
-    results: list[str] = list((yield AsCompleted(*operations)))
+    results: list[tuple[str, float]] = list((yield AsCompleted(*operations)))
 
     elapsed = time.monotonic() - start
 
     labels: list[str] = [label for label, _ in results]
-    completion_times: list[str] = [timestamp for _, timestamp in results]
+    completion_times: list[float] = [timestamp for _, timestamp in results]
 
     check(
         len(results) == len(delays),
@@ -1132,7 +1136,7 @@ def test_as_completed_batch() -> Generator[Any, Any, None]:
     record_metric(
         "AsCompleted batch overhead",
         max(0.0, elapsed - max(delays)),
-        target=0.00075,
+        target=0.0,
         limit=MAX_LATENESS,
     )
 
@@ -1536,11 +1540,13 @@ def test_mixed_thread_timer_load() -> Generator[Any, Any, None]:
         max(timer_observations),
     ) - start
 
+    overhead = elapsed - 0.07
+
     record_metric(
         "mixed thread/timer workload",
-        elapsed,
-        target=0.07000,
-        limit=0.20,
+        overhead,
+        target=0,
+        limit=0.002,
     )
 
     report(
