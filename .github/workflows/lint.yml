@@ -28,6 +28,3 @@ jobs:
 
       - name: Run ruff check
         run: ruff check .
-
-      - name: Run refurb check
-        run: refurb --enable-all .

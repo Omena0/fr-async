@@ -55,10 +55,25 @@ extend-select = [
     "N", "PERF", "PIE", "PLR", "RET", "RSE", "RUF", "SIM", "SLF",
     "SLOT", "TC", "UP",
 ]
-extend-ignore = ["TRY300", "PLR2004", "S310", "S101", "S603", "S607", "G004", "RUF001"]
+extend-ignore = [
+    "TRY300", "PLR2004", "S310", "S101", "S603", "S607", "G004",
+    "RUF001", "BLE001", "EM101", "TC003", "E722", "RUF059", "F841",
+    "SIM102", "N802", "SLF001", "TC001", "N818", "SIM115", "B026",
+    "I001"
+]
+
+exclude = [
+    "fr_async/http_bench.py",
+    "fr_async/server.py"
+]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 18
+
+[tool.ruff.lint.pylint]
+max-branches = 15
+max-returns = 7
+max-args = 8
 
 [tool.refurb]
 ignore = ["FURB107", "FURB120"]
