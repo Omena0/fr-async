@@ -1,10 +1,64 @@
+[build-system]
+requires = ["setuptools>=77.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fr-async"
+version = "0.1.0"
+description = "Async but with yield instead of await"
+readme = "README.md"
+requires-python = ">=3.15"
+license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
+license-files = ["LICENSE.md"]
+authors = [
+    {name = "Omena0", email = "omena0mc@gmail.com"},
+]
+keywords = [
+    "async",
+    "asyncio",
+    "concurrency",
+    "event-loop",
+    "generators",
+    "cooperative-multitasking",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.15",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Networking",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/Omena0/fr-async"
+Repository = "https://github.com/Omena0/fr-async"
+Issues = "https://github.com/Omena0/fr-async/issues"
+
+[tool.setuptools.packages.find]
+include = ["fr_async*"]
 
 [tool.pyright]
 pythonVersion = "3.15"
-typeCheckingMode = 'strict'
+typeCheckingMode = "strict"
 exclude = ["fr_async/test.py"]
+reportMissingParameterType = "none"
+reportUnusedVariable = "none"
+reportUnusedImport = "none"
+reportPrivateUsage = "none"
 
-reportPrivateUsage = false
-reportMissingParameterType = false
-reportUnusedVariable = false
-reportUnusedImport = false
+[tool.ruff.lint]
+extend-select = [
+    "A", "B", "BLE", "C4", "C90", "EM", "ERA", "FA", "FURB", "ISC",
+    "N", "PERF", "PIE", "PLR", "RET", "RSE", "RUF", "SIM", "SLF",
+    "SLOT", "TC", "UP",
+]
+extend-ignore = ["TRY300", "PLR2004", "S310", "S101", "S603", "S607", "G004", "RUF001"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 18
+
+[tool.refurb]
+ignore = ["FURB107", "FURB120"]
