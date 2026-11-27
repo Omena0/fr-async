@@ -464,6 +464,7 @@ __all__ = [
     'FileRead',
     'FileWrite',
     'Message',
+    'MessageWithSocket',
     'Messages',
     'Sleep',
     'TaskGroupAsCompleted',

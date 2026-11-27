@@ -181,8 +181,9 @@ class ExecutionLoop:
         if not isinstance(message, MessageWithSocket):
             return
 
+        sock_msg: MessageWithSocket = message
         try:
-            key = self.selector.get_key(message.socket)
+            key = self.selector.get_key(sock_msg.socket)
         except KeyError:
             return
 
