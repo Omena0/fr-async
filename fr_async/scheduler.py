@@ -1,12 +1,10 @@
-import time
 from dataclasses import dataclass
-from itertools import count
 from math import exp, isfinite
-from typing import TYPE_CHECKING, Any
+from itertools import count
+from typing import Any
+import time
 
-if TYPE_CHECKING:
-    from fr_async.classes import Task
-
+lazy from fr_async.classes import Task
 
 class BaseScheduler:
     __slots__ = ()

@@ -1,5 +1,5 @@
-import sys
 from typing import Any
+import os
 
 
 def log(*args: Any, **kwargs: Any):
@@ -7,4 +7,4 @@ def log(*args: Any, **kwargs: Any):
     print(*args, **kwargs)
 
 
-DEBUG = '-d' in sys.argv
+DEBUG = 'FR_ASYNC_DEBUG' in os.environ

@@ -1,8 +1,8 @@
-import math
-import socket
-import time
-from collections.abc import Generator
 from typing import Any, Literal, TypeIs
+from collections.abc import Generator
+import socket
+import math
+import time
 
 from .classes import Task, Yieldable
 from .loop import ExecutionLoop

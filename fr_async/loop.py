@@ -1,28 +1,21 @@
-import heapq
-import itertools
-import selectors
-import socket
-import time
-from collections import deque
-from collections.abc import Generator
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager, suppress
-from queue import SimpleQueue
+from collections.abc import Generator
 from selectors import SelectorKey
+from queue import SimpleQueue
+from collections import deque
 from typing import Any, cast
+import selectors
+import itertools
+import socket
+import heapq
+import time
 
 from .exceptions import NoEventLoopException, TaskTimeoutError
 lazy from .classes import Task, Yieldable
-lazy from .messages import (
-    Accept,
-    AsCompleted,
-    BackgroundMessage,
-    Message,
-    Messages,
-    MessageWithSocket,
-)
 lazy from .scheduler import BaseScheduler
 lazy from .utils import log
+from .messages import *
 
 
 class _DequeScheduler(BaseScheduler):

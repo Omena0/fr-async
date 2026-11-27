@@ -1,11 +1,11 @@
-import argparse
+from dataclasses import dataclass, field
+from time import perf_counter
+from math import ceil
 import contextlib
+import argparse
 import errno
 import select
 import socket
-from dataclasses import dataclass, field
-from math import ceil
-from time import perf_counter
 
 _HEADER_END = b"\r\n\r\n"
 _EPOLL_WRITE = select.EPOLLOUT | select.EPOLLET

@@ -1,18 +1,17 @@
+from collections.abc import Callable, Generator, Iterable
+from typing import IO, Any, final, overload
+from concurrent.futures import Future
+from collections import deque
 import heapq
 import selectors
 import socket
 import time
-from collections import deque
-from collections.abc import Callable, Generator, Iterable
-from concurrent.futures import Future
-from typing import IO, Any, final, overload
 
-lazy from .classes import Task
-lazy from .exceptions import NoEventLoopException
-lazy from .loop import ExecutionLoop, getEventLoop
 lazy from .typing import LiteralType, ReturnsAfter, YieldTypeIs
+lazy from .loop import ExecutionLoop, getEventLoop
+lazy from .exceptions import NoEventLoopException
+lazy from .classes import Task
 lazy from .utils import log
-
 
 # Check if a set of blockers are resolved
 def check_resolved(blockers: deque[Message]) -> bool:

@@ -1,17 +1,17 @@
 """Example HTTP server built with the nonblocking socket accept message."""
 
-import os
-import socket
-import traceback
+from urllib.parse import unquote_to_bytes
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote_to_bytes
+import traceback
+import socket
+import os
 
-from .classes import File, Task, Yieldable
-from .loop import ExecutionLoop, getEventLoop
-from .messages import Accept, FileRead, WaitReadable, WaitWritable
-from .scheduler import EEVDFScheduler
+from ..messages import Accept, FileRead, WaitReadable, WaitWritable
+from ..loop import ExecutionLoop, getEventLoop
+from ..classes import File, Task, Yieldable
+from ..scheduler import EEVDFScheduler
 
 DEBUG = True
 

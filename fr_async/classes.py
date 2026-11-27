@@ -1,22 +1,15 @@
-import inspect
-import os
-from collections import deque
+from typing import IO, Any, Final, Literal, Self, TypeIs, overload
 from collections.abc import Callable, Generator
 from contextvars import Context, copy_context
-from os import PathLike
-from typing import IO, Any, Final, Literal, Self, TypeIs, overload
+from collections import deque
+import inspect
+import os
 
+from .typing import OpenMode, FilePath, OpenBinaryMode, OpenTextMode
+lazy from .messages import check_resolved
 lazy from .loop import getEventLoop
-lazy from .messages import (
-    FileRead,
-    FileWrite,
-    Message,
-    TaskGroupAsCompleted,
-    TaskGroupCollect,
-    TaskJoin,
-    check_resolved,
-)
 lazy from .utils import log
+from .messages import *
 
 
 class _Missing:
@@ -197,11 +190,6 @@ class Yieldable:
         return f"Yieldable({self.func.__name__})"
 
 # File wrapper
-type FilePath = str | PathLike[str]
-type OpenTextMode = Literal['r', 'w', 'a', 'x', 'r+', 'w+', 'a+', 'x+']
-type OpenBinaryMode = Literal['rb', 'wb', 'ab', 'xb', 'rb+', 'wb+', 'ab+', 'xb+']
-type OpenMode = OpenTextMode | OpenBinaryMode
-
 class File[T: (str, bytes)]:
     'Wrap a text or binary file and expose event loop file operations.'
     __slots__ = ('_binary', '_file')

@@ -1,30 +1,12 @@
+from fr_async import ExecutionLoop, Task, Yieldable
+from fr_async.messages import Sleep
+import time
 
+def main():
+    t = time.monotonic()
+    print("start")
+    yield Sleep(1.0)
+    print(f"1s sleep = 1 + {(time.monotonic()-t-1)*1000:.4f} ms overhead")
 
-from typing import Any
-
-from .classes import Task, Yieldable
-from .loop import ExecutionLoop
-from .messages import *
-from .scheduler import EEVDFScheduler
-
-
-def gen():
-    yield Sleep(1)
-    print('1')
-    yield Sleep(1)
-    print('2')
-    yield Sleep(1)
-    print('3')
-
-def main() -> Any:
-    yield Task(gen(), background=True)
-    print('a')
-    yield Sleep(1)
-    print('b')
-    yield Sleep(1)
-    print('c')
-    yield Sleep(1)
-    print('d')
-
-loop: ExecutionLoop = ExecutionLoop(EEVDFScheduler)
+loop = ExecutionLoop()
 loop.run(Yieldable(main))

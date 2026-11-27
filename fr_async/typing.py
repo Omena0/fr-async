@@ -1,9 +1,9 @@
-from typing import Annotated
+from typing import Annotated, Literal
+from os import PathLike
 
-
+# Special types (implemented in https://github.com/Omena0/basedpyright)
 class _InferYieldType:
     __slots__ = ()
-
 
 class YieldTypeIs[T = _InferYieldType]:
     __slots__ = ()
@@ -26,3 +26,8 @@ class ReturnsAfter[Duration, T=None]:
 
     """Describes a value of type T becoming available after Duration."""
 
+# Normal types
+type FilePath = str | PathLike[str]
+type OpenTextMode = Literal['r', 'w', 'a', 'x', 'r+', 'w+', 'a+', 'x+']
+type OpenBinaryMode = Literal['rb', 'wb', 'ab', 'xb', 'rb+', 'wb+', 'ab+', 'xb+']
+type OpenMode = OpenTextMode | OpenBinaryMode
