@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en" data-site-prefix="/fr-async/">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Modules/package — Fr-async</title>
+  <meta property="og:title" content="Modules/package — Fr-async">
+  <meta name="description" content="Modules/package — Fr-async documentation">
+  <meta property="og:description" content="Modules/package — Fr-async documentation">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Fr-async Docs">
+  <meta name="theme-color" content="#6366f1">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="/fr-async/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/fr-async/style.css">
+  <link rel="stylesheet" href="/fr-async/fonts.css" media="print" onload="this.media='all'">
+</head>
+<body>
+  <!-- Header -->
+  <header class="site-header">
+    <button class="menu-toggle" aria-label="Toggle menu">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="24" height="24" aria-hidden="true">
+        <path d="M3 12h18M3 6h18M3 18h18"/>
+      </svg>
+    </button>
+    <div class="header-brand-row">
+      <a href="index.html" class="header-brand">
+          <span class="logo">F</span>
+          Fr-async
+      </a>
+      <div class="version-selector-wrap">  <select id="version-selector" class="version-selector" aria-label="Select version">    {config.get("_version_options", "")}  </select></div>
+    </div>
+    <div class="header-search">
+      <svg class="header-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="24" height="24" aria-hidden="true">  <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><input type="text" id="header-search" placeholder="Search docs… (Ctrl+K)" autocomplete="off"><div id="search-results" class="search-results"></div>
+    </div>
+    <nav class="header-nav">
+      <a href="index.html">Docs</a>
+    </nav>
+  </header>
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+<div class="search-box">
+  <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20" aria-hidden="true">
+    <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+  </svg>
+  <input type="text" id="sidebar-search" placeholder="Search docs…">
+</div>
+<div class="sidebar-section">
+  <div class="sidebar-heading" data-section="overview">Overview</div>
+  <ul class="sidebar-links">
+    <li><a href="../index.html">Home</a></li>
+  </ul>
+</div>
+<div class="sidebar-section">
+  <div class="sidebar-heading" data-section="modules">Modules</div>
+  <ul class="sidebar-links">
+    <li><a href="modules/package.html" class="active">Package exports</a></li>
+    <li><a href="classes.html">Classes</a></li>
+    <li><a href="loop.html">Event loop</a></li>
+    <li><a href="messages.html">Messages</a></li>
+    <li><a href="scheduler.html">Schedulers</a></li>
+    <li><a href="exceptions.html">Exceptions</a></li>
+    <li><a href="typing.html">Typing</a></li>
+    <li><a href="utils.html">Utilities</a></li>
+    <li><a href="http-bench.html">HTTP benchmark</a></li>
+  </ul>
+</div>
+<div class="sidebar-section">
+  <div class="sidebar-heading collapsed" data-section="core-classes">Core classes</div>
+  <ul class="sidebar-links">
+    <li><a href="../classes/assignable.html">Assignable</a></li>
+    <li><a href="../classes/task.html">Task</a></li>
+    <li><a href="../classes/yieldable.html">Yieldable</a></li>
+    <li><a href="../classes/file.html">File</a></li>
+    <li><a href="../classes/task-group.html">TaskGroup</a></li>
+    <li><a href="../classes/execution-loop.html">ExecutionLoop</a></li>
+    <li><a href="../classes/base-scheduler.html">BaseScheduler</a></li>
+    <li><a href="../classes/eevdf-scheduler.html">EEVDFScheduler</a></li>
+  </ul>
+</div>
+<div class="sidebar-section">
+  <div class="sidebar-heading collapsed" data-section="message-classes">Message classes</div>
+  <ul class="sidebar-links">
+    <li><a href="../classes/message.html">Message</a></li>
+    <li><a href="../classes/background-message.html">BackgroundMessage</a></li>
+    <li><a href="../classes/messages.html">Messages</a></li>
+    <li><a href="../classes/sleep.html">Sleep</a></li>
+    <li><a href="../classes/message-with-socket.html">MessageWithSocket</a></li>
+    <li><a href="../classes/wait-readable.html">WaitReadable</a></li>
+    <li><a href="../classes/wait-writable.html">WaitWritable</a></li>
+    <li><a href="../classes/accept.html">Accept</a></li>
+    <li><a href="../classes/to-thread.html">ToThread</a></li>
+    <li><a href="../classes/as-completed.html">AsCompleted</a></li>
+    <li><a href="../classes/task-join.html">TaskJoin</a></li>
+    <li><a href="../classes/task-group-collect.html">TaskGroupCollect</a></li>
+    <li><a href="../classes/task-group-as-completed.html">TaskGroupAsCompleted</a></li>
+    <li><a href="../classes/file-read.html">FileRead</a></li>
+    <li><a href="../classes/file-write.html">FileWrite</a></li>
+  </ul>
+</div>
+<div class="sidebar-section">
+  <div class="sidebar-heading collapsed" data-section="exceptions-and-typing">Exceptions and typing</div>
+  <ul class="sidebar-links">
+    <li><a href="../classes/no-event-loop-exception.html">NoEventLoopException</a></li>
+    <li><a href="../classes/task-timeout-error.html">TaskTimeoutError</a></li>
+    <li><a href="../classes/yield-type-is.html">YieldTypeIs</a></li>
+    <li><a href="../classes/returns-after.html">ReturnsAfter</a></li>
+  </ul>
+</div>
+<div class="sidebar-section">
+  <div class="sidebar-heading collapsed" data-section="benchmark-classes">Benchmark classes</div>
+  <ul class="sidebar-links">
+    <li><a href="../classes/http-bench-config.html">Config</a></li>
+    <li><a href="../classes/http-bench-request.html">Request</a></li>
+  </ul>
+</div>
+  </aside>
+  <div class="sidebar-overlay"></div>
+
+  <!-- Main -->
+  <main class="main">
+    <div class="content">
+      
+      <h1><code>fr_async</code></h1>
+<p>The package root re-exports the main runtime entry points and the
+<code>fr_async.<a href="../classes/messages.html" class="filename-reference">messages</a></code> module.</p>
+<p><strong>Source:</strong> <a href="#coderef-0" class="code-reference" data-coderef-id="coderef-0" data-coderef-file="fr_async/__init__.py" data-coderef-line="1" data-coderef-end-line="" data-coderef-column="" data-coderef-function="">fr_async/&lt;strong&gt;init&lt;/strong&gt;.py:1</a></p>
+<h2>Explicit package exports</h2>
+<p>The package's <code><strong>all</strong></code> contains:</p>
+<ul>
+<li><code>EEVDFScheduler</code> — <a href="../classes/eevdf-scheduler.html">scheduler class</a>.</li>
+<li><code>ExecutionLoop</code> — <a href="../classes/execution-loop.html">event loop</a>.</li>
+<li><code><a href="../classes/file.html" class="filename-reference">File</a></code> — <a href="../classes/file.html">file wrapper</a>.</li>
+<li><code><a href="../classes/task.html" class="filename-reference">Task</a></code> — <a href="../classes/task.html">task object</a>.</li>
+<li><code>TaskGroup</code> — <a href="../classes/task-group.html">task collection</a>.</li>
+<li><code><a href="../classes/yieldable.html" class="filename-reference">Yieldable</a></code> — <a href="../classes/yieldable.html">callable wrapper</a>.</li>
+<li><code>getEventLoop</code> — <a href="loop.html">current loop accessor</a>.</li>
+<li><code><a href="../classes/messages.html" class="filename-reference">messages</a></code> — the <code>fr_async.<a href="../classes/messages.html" class="filename-reference">messages</a></code> module.</li>
+</ul>
+<p>These are the names included by <code>from fr_async import *</code>.</p>
+<h2>Message classes at the package root</h2>
+<p><code>fr_async.<strong>init</strong></code> also performs <code>from .<a href="../classes/messages.html" class="filename-reference">messages</a> import *</code>, so names in
+<code>fr_async.<a href="../classes/messages.html" class="filename-reference">messages</a>.<strong>all</strong></code> are available for explicit imports from the
+package root, for example <code>from fr_async import <a href="../classes/sleep.html" class="filename-reference">Sleep</a></code>. However, those names
+are not included in the package's own <code><strong>all</strong></code>; they are therefore omitted by
+<code>from fr_async import *</code>. Importing message classes from
+<code>fr_async.<a href="../classes/messages.html" class="filename-reference">messages</a></code> makes the intended module boundary explicit.</p>
+    </div>
+    <footer class="site-footer">
+      &copy; 2026 Omena0 &middot; Fr-async Documentation
+    </footer>
+  </main>
+
+  <!-- Back to top -->
+  <button class="back-to-top" aria-label="Back to top">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+        <path d="M18 15l-6-6-6 6"/>
+      </svg>
+    </button>
+
+    
+    <script id="code-refs-data" type="application/json">[{"id": "coderef-0", "file": "fr_async/__init__.py", "link_text": "fr_async/<strong>init</strong>.py:1", "column": null, "line": 1, "end_line": null, "function": null}]</script>
+    <script id="search-config" type="application/json">{"pages": true, "titles": true, "headings": true, "content": true, "symbols": true, "files": true}</script>
+    <script id="features-config" type="application/json">{"backlinks": true, "related": true, "auto_link": true, "versioning": true, "search": true, "code_references": true, "link_preview": true, "code_highlighting": true, "blockquotes": true, "ext_tags": true, "inline_copy": true}</script>
+    <script id="custom-tags-config" type="application/json">{"ext": {"label": "Extensions", "display": "ext", "class": "ext-tag"}}</script>
+    <script src="/fr-async/script.js" defer></script>
+</body>
+</html>

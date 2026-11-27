@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en" data-site-prefix="/fr-async/">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Modules/messages — Fr-async</title>
+  <meta property="og:title" content="Modules/messages — Fr-async">
+  <meta name="description" content="Modules/messages — Fr-async documentation">
+  <meta property="og:description" content="Modules/messages — Fr-async documentation">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Fr-async Docs">
+  <meta name="theme-color" content="#6366f1">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="/fr-async/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/fr-async/style.css">
+  <link rel="stylesheet" href="/fr-async/fonts.css" media="print" onload="this.media='all'">
+</head>
+<body>
+  <!-- Header -->
+  <header class="site-header">
+    <button class="menu-toggle" aria-label="Toggle menu">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="24" height="24" aria-hidden="true">
+        <path d="M3 12h18M3 6h18M3 18h18"/>
+      </svg>
+    </button>
+    <div class="header-brand-row">
+      <a href="index.html" class="header-brand">
+          <span class="logo">F</span>
+          Fr-async
+      </a>
+      <div class="version-selector-wrap">  <select id="version-selector" class="version-selector" aria-label="Select version">    {config.get("_version_options", "")}  </select></div>
+    </div>
+    <div class="header-search">
+      <svg class="header-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="24" height="24" aria-hidden="true">  <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><input type="text" id="header-search" placeholder="Search docs… (Ctrl+K)" autocomplete="off"><div id="search-results" class="search-results"></div>
+    </div>
+    <nav class="header-nav">
+      <a href="index.html">Docs</a>
+    </nav>
+  </header>
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+<div class="search-box">
+  <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20" aria-hidden="true">
+    <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+  </svg>
+  <input type="text" id="sidebar-search" placeholder="Search docs…">
+</div>
+<div class="sidebar-section">
+  <div class="sidebar-heading" data-section="overview">Overview</div>
+  <ul class="sidebar-links">
+    <li><a href="../index.html">Home</a></li>
+  </ul>
+</div>
+<div class="sidebar-section">
+  <div class="sidebar-heading" data-section="modules">Modules</div>
+  <ul class="sidebar-links">
+    <li><a href="package.html">Package exports</a></li>
+    <li><a href="classes.html">Classes</a></li>
+    <li><a href="loop.html">Event loop</a></li>
+    <li><a href="modules/messages.html" class="active">Messages</a></li>
+    <li><a href="scheduler.html">Schedulers</a></li>
+    <li><a href="exceptions.html">Exceptions</a></li>
+    <li><a href="typing.html">Typing</a></li>
+    <li><a href="utils.html">Utilities</a></li>
+    <li><a href="http-bench.html">HTTP benchmark</a></li>
+  </ul>
+</div>
+<div class="sidebar-section">
+  <div class="sidebar-heading collapsed" data-section="core-classes">Core classes</div>
+  <ul class="sidebar-links">
+    <li><a href="../classes/assignable.html">Assignable</a></li>
+    <li><a href="../classes/task.html">Task</a></li>
+    <li><a href="../classes/yieldable.html">Yieldable</a></li>
+    <li><a href="../classes/file.html">File</a></li>
+    <li><a href="../classes/task-group.html">TaskGroup</a></li>
+    <li><a href="../classes/execution-loop.html">ExecutionLoop</a></li>
+    <li><a href="../classes/base-scheduler.html">BaseScheduler</a></li>
+    <li><a href="../classes/eevdf-scheduler.html">EEVDFScheduler</a></li>
+  </ul>
+</div>
+<div class="sidebar-section">
+  <div class="sidebar-heading collapsed" data-section="message-classes">Message classes</div>
+  <ul class="sidebar-links">
+    <li><a href="../classes/message.html">Message</a></li>
+    <li><a href="../classes/background-message.html">BackgroundMessage</a></li>
+    <li><a href="../classes/messages.html">Messages</a></li>
+    <li><a href="../classes/sleep.html">Sleep</a></li>
+    <li><a href="../classes/message-with-socket.html">MessageWithSocket</a></li>
+    <li><a href="../classes/wait-readable.html">WaitReadable</a></li>
+    <li><a href="../classes/wait-writable.html">WaitWritable</a></li>
+    <li><a href="../classes/accept.html">Accept</a></li>
+    <li><a href="../classes/to-thread.html">ToThread</a></li>
+    <li><a href="../classes/as-completed.html">AsCompleted</a></li>
+    <li><a href="../classes/task-join.html">TaskJoin</a></li>
+    <li><a href="../classes/task-group-collect.html">TaskGroupCollect</a></li>
+    <li><a href="../classes/task-group-as-completed.html">TaskGroupAsCompleted</a></li>
+    <li><a href="../classes/file-read.html">FileRead</a></li>
+    <li><a href="../classes/file-write.html">FileWrite</a></li>
+  </ul>
+</div>
+<div class="sidebar-section">
+  <div class="sidebar-heading collapsed" data-section="exceptions-and-typing">Exceptions and typing</div>
+  <ul class="sidebar-links">
+    <li><a href="../classes/no-event-loop-exception.html">NoEventLoopException</a></li>
+    <li><a href="../classes/task-timeout-error.html">TaskTimeoutError</a></li>
+    <li><a href="../classes/yield-type-is.html">YieldTypeIs</a></li>
+    <li><a href="../classes/returns-after.html">ReturnsAfter</a></li>
+  </ul>
+</div>
+<div class="sidebar-section">
+  <div class="sidebar-heading collapsed" data-section="benchmark-classes">Benchmark classes</div>
+  <ul class="sidebar-links">
+    <li><a href="../classes/http-bench-config.html">Config</a></li>
+    <li><a href="../classes/http-bench-request.html">Request</a></li>
+  </ul>
+</div>
+  </aside>
+  <div class="sidebar-overlay"></div>
+
+  <!-- Main -->
+  <main class="main">
+    <div class="content">
+      
+      <h1><code>fr_async.<a href="../classes/messages.html" class="filename-reference">messages</a></code></h1>
+<p>Message objects are yielded by tasks to request work from the event loop.
+Registration messages arrange for the loop to resume a task when an event
+occurs; execution messages run their blocking operation in the loop's thread
+pool.</p>
+<h2>Exported classes</h2>
+<p>The module's <code><strong>all</strong></code> contains the following classes:</p>
+<ul>
+<li><a href="../classes/message.html">Message</a> — base class for yielded operations.
+  <a href="#coderef-0" class="code-reference" data-coderef-id="coderef-0" data-coderef-file="fr_async/messages.py" data-coderef-line="40" data-coderef-end-line="" data-coderef-column="" data-coderef-function="">Source</a></li>
+<li><a href="../classes/background-message.html">BackgroundMessage</a> — message with
+  detached/background execution support. <a href="#coderef-1" class="code-reference" data-coderef-id="coderef-1" data-coderef-file="fr_async/messages.py" data-coderef-line="87" data-coderef-end-line="" data-coderef-column="" data-coderef-function="">Source</a></li>
+<li><a href="../classes/messages.html">Messages</a> — groups messages that a task waits for
+  together. <a href="#coderef-2" class="code-reference" data-coderef-id="coderef-2" data-coderef-file="fr_async/messages.py" data-coderef-line="105" data-coderef-end-line="" data-coderef-column="" data-coderef-function="">Source</a></li>
+<li><a href="../classes/sleep.html">Sleep</a> — waits for a monotonic-clock deadline.
+  <a href="#coderef-3" class="code-reference" data-coderef-id="coderef-3" data-coderef-file="fr_async/messages.py" data-coderef-line="114" data-coderef-end-line="" data-coderef-column="" data-coderef-function="">Source</a></li>
+<li><a href="../classes/wait-readable.html">WaitReadable</a> — waits for socket readability.
+  <a href="#coderef-4" class="code-reference" data-coderef-id="coderef-4" data-coderef-file="fr_async/messages.py" data-coderef-line="147" data-coderef-end-line="" data-coderef-column="" data-coderef-function="">Source</a></li>
+<li><a href="../classes/wait-writable.html">WaitWritable</a> — waits for socket writability.
+  <a href="#coderef-5" class="code-reference" data-coderef-id="coderef-5" data-coderef-file="fr_async/messages.py" data-coderef-line="162" data-coderef-end-line="" data-coderef-column="" data-coderef-function="">Source</a></li>
+<li><a href="../classes/accept.html">Accept</a> — accepts all currently queued connections.
+  <a href="#coderef-6" class="code-reference" data-coderef-id="coderef-6" data-coderef-file="fr_async/messages.py" data-coderef-line="177" data-coderef-end-line="" data-coderef-column="" data-coderef-function="">Source</a></li>
+<li><a href="../classes/to-thread.html">ToThread</a> — runs a callable in the thread pool.
+  <a href="#coderef-7" class="code-reference" data-coderef-id="coderef-7" data-coderef-file="fr_async/messages.py" data-coderef-line="209" data-coderef-end-line="" data-coderef-column="" data-coderef-function="">Source</a></li>
+<li><a href="../classes/as-completed.html">AsCompleted</a> — exposes thread-pool results in
+  completion order. <a href="#coderef-8" class="code-reference" data-coderef-id="coderef-8" data-coderef-file="fr_async/messages.py" data-coderef-line="240" data-coderef-end-line="" data-coderef-column="" data-coderef-function="">Source</a></li>
+<li><a href="../classes/task-join.html">TaskJoin</a> — waits for one task and returns its
+  result. <a href="#coderef-9" class="code-reference" data-coderef-id="coderef-9" data-coderef-file="fr_async/messages.py" data-coderef-line="308" data-coderef-end-line="" data-coderef-column="" data-coderef-function="">Source</a></li>
+<li><a href="../classes/task-group-collect.html">TaskGroupCollect</a> — collects task results
+  in input order. <a href="#coderef-10" class="code-reference" data-coderef-id="coderef-10" data-coderef-file="fr_async/messages.py" data-coderef-line="331" data-coderef-end-line="" data-coderef-column="" data-coderef-function="">Source</a></li>
+<li><a href="../classes/task-group-as-completed.html">TaskGroupAsCompleted</a> — exposes task
+  results in completion order. <a href="#coderef-11" class="code-reference" data-coderef-id="coderef-11" data-coderef-file="fr_async/messages.py" data-coderef-line="368" data-coderef-end-line="" data-coderef-column="" data-coderef-function="">Source</a></li>
+<li><a href="../classes/file-read.html">FileRead</a> — performs a file read in the thread
+  pool. <a href="#coderef-12" class="code-reference" data-coderef-id="coderef-12" data-coderef-file="fr_async/messages.py" data-coderef-line="426" data-coderef-end-line="" data-coderef-column="" data-coderef-function="">Source</a></li>
+<li><a href="../classes/file-write.html">FileWrite</a> — performs a file write in the thread
+  pool. <a href="#coderef-13" class="code-reference" data-coderef-id="coderef-13" data-coderef-file="fr_async/messages.py" data-coderef-line="441" data-coderef-end-line="" data-coderef-column="" data-coderef-function="">Source</a></li>
+</ul>
+<h2>Additional public module names</h2>
+<p>These names are defined without a leading underscore, but are intentionally
+omitted from <code><strong>all</strong></code>:</p>
+<ul>
+<li><a href="../classes/message-with-socket.html">MessageWithSocket</a> is the shared base
+  for socket messages. <a href="#coderef-14" class="code-reference" data-coderef-id="coderef-14" data-coderef-file="fr_async/messages.py" data-coderef-line="141" data-coderef-end-line="" data-coderef-column="" data-coderef-function="">Source</a></li>
+<li><code>check_resolved(blockers: deque&#91;<a href="../classes/message.html" class="filename-reference">Message</a>&#93;) -&gt; bool</code> removes resolved messages
+  from the front of a blocker queue and reports whether it is empty.
+  <a href="#coderef-15" class="code-reference" data-coderef-id="coderef-15" data-coderef-file="fr_async/messages.py" data-coderef-line="17" data-coderef-end-line="" data-coderef-column="" data-coderef-function="">Source</a></li>
+<li><code>register_event(<a href="../classes/message.html" class="filename-reference">message</a>: MessageWithSocket, <a href="../classes/task.html" class="filename-reference">task</a>: <a href="../classes/task.html" class="filename-reference">Task</a>, event: int)</code>
+  registers a socket message with the current loop's selector.
+  <a href="#coderef-16" class="code-reference" data-coderef-id="coderef-16" data-coderef-file="fr_async/messages.py" data-coderef-line="28" data-coderef-end-line="" data-coderef-column="" data-coderef-function="">Source</a></li>
+</ul>
+<p>The helpers are implementation-facing; normal applications should yield the
+message classes rather than call these helpers directly.</p>
+<p><code>fr_async.<strong>init</strong></code> imports the names in this module's <code><strong>all</strong></code> into the
+package namespace. The package itself has a narrower <code><strong>all</strong></code>, so explicit
+imports such as <code>from fr_async import <a href="../classes/sleep.html" class="filename-reference">Sleep</a></code> work, but <code>from fr_async import *</code>
+does not include message classes.</p>
+<h2>Message lifecycle</h2>
+<p>A task yields a message. The loop calls <code>register()</code> for registration-based
+messages or submits <code>execute()</code> for execution-based messages. When the message
+is resolved, the task becomes eligible to run again. The exact value sent back
+into the generator is defined by the message type and its typing annotation.</p>
+    </div>
+    <footer class="site-footer">
+      &copy; 2026 Omena0 &middot; Fr-async Documentation
+    </footer>
+  </main>
+
+  <!-- Back to top -->
+  <button class="back-to-top" aria-label="Back to top">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+        <path d="M18 15l-6-6-6 6"/>
+      </svg>
+    </button>
+
+    
+    <script id="code-refs-data" type="application/json">[{"id": "coderef-0", "file": "fr_async/messages.py", "link_text": "Source", "column": null, "line": 40, "end_line": null, "function": null}, {"id": "coderef-1", "file": "fr_async/messages.py", "link_text": "Source", "column": null, "line": 87, "end_line": null, "function": null}, {"id": "coderef-2", "file": "fr_async/messages.py", "link_text": "Source", "column": null, "line": 105, "end_line": null, "function": null}, {"id": "coderef-3", "file": "fr_async/messages.py", "link_text": "Source", "column": null, "line": 114, "end_line": null, "function": null}, {"id": "coderef-4", "file": "fr_async/messages.py", "link_text": "Source", "column": null, "line": 147, "end_line": null, "function": null}, {"id": "coderef-5", "file": "fr_async/messages.py", "link_text": "Source", "column": null, "line": 162, "end_line": null, "function": null}, {"id": "coderef-6", "file": "fr_async/messages.py", "link_text": "Source", "column": null, "line": 177, "end_line": null, "function": null}, {"id": "coderef-7", "file": "fr_async/messages.py", "link_text": "Source", "column": null, "line": 209, "end_line": null, "function": null}, {"id": "coderef-8", "file": "fr_async/messages.py", "link_text": "Source", "column": null, "line": 240, "end_line": null, "function": null}, {"id": "coderef-9", "file": "fr_async/messages.py", "link_text": "Source", "column": null, "line": 308, "end_line": null, "function": null}, {"id": "coderef-10", "file": "fr_async/messages.py", "link_text": "Source", "column": null, "line": 331, "end_line": null, "function": null}, {"id": "coderef-11", "file": "fr_async/messages.py", "link_text": "Source", "column": null, "line": 368, "end_line": null, "function": null}, {"id": "coderef-12", "file": "fr_async/messages.py", "link_text": "Source", "column": null, "line": 426, "end_line": null, "function": null}, {"id": "coderef-13", "file": "fr_async/messages.py", "link_text": "Source", "column": null, "line": 441, "end_line": null, "function": null}, {"id": "coderef-14", "file": "fr_async/messages.py", "link_text": "Source", "column": null, "line": 141, "end_line": null, "function": null}, {"id": "coderef-15", "file": "fr_async/messages.py", "link_text": "Source", "column": null, "line": 17, "end_line": null, "function": null}, {"id": "coderef-16", "file": "fr_async/messages.py", "link_text": "Source", "column": null, "line": 28, "end_line": null, "function": null}]</script>
+    <script id="search-config" type="application/json">{"pages": true, "titles": true, "headings": true, "content": true, "symbols": true, "files": true}</script>
+    <script id="features-config" type="application/json">{"backlinks": true, "related": true, "auto_link": true, "versioning": true, "search": true, "code_references": true, "link_preview": true, "code_highlighting": true, "blockquotes": true, "ext_tags": true, "inline_copy": true}</script>
+    <script id="custom-tags-config" type="application/json">{"ext": {"label": "Extensions", "display": "ext", "class": "ext-tag"}}</script>
+    <script src="/fr-async/script.js" defer></script>
+</body>
+</html>
