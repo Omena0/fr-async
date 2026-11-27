@@ -365,7 +365,7 @@ class Collect[T=Any](BackgroundMessage, YieldTypeIs[list[T] | Generator[T]]):
         super().__init__(background=background, timeout=timeout)
         self.items: tuple[Task[T] | Message, ...] = items
         self.mode = mode
-        self.results: list[T | None | BaseException] = [None] * len(items)
+        self.results: list[T | BaseException | None] = [None] * len(items)
         self.indices = {id(item): index for index, item in enumerate(items)}
         self.completed: deque[tuple[Any, BaseException | None]] = deque()
         self.loop: ExecutionLoop | None = None
