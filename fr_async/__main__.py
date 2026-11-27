@@ -1,4 +1,4 @@
-from fr_async import ExecutionLoop, Task, Yieldable
+from fr_async import ExecutionLoop, Yieldable
 from fr_async.messages import Sleep
 import time
 

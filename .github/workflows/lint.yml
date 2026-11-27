@@ -7,7 +7,7 @@ on:
     branches: ["main"]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   lint:
@@ -26,5 +26,14 @@ jobs:
       - name: Install ruff
         run: pip install ruff
 
-      - name: Run ruff check
-        run: ruff check .
+      - name: Run ruff check with autofix
+        run: ruff check --fix .
+
+      - name: Commit autofixes
+        if: github.ref == 'refs/heads/main'
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add -A
+          git diff --cached --quiet || git commit -m "chore(lint): autofix ruff issues"
+          git push

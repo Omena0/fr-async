@@ -1,4 +1,4 @@
-from typing import IO, Any, Final, Literal, Self, TypeIs, overload
+from typing import IO, Any, Final, Self, TypeIs, overload
 from collections.abc import Callable, Generator
 from contextvars import Context, copy_context
 from collections import deque
