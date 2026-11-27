@@ -1,7 +1,8 @@
-from typing import Any, Generator, TypeIs, Literal
-import socket
 import math
+import socket
 import time
+from collections.abc import Generator
+from typing import Any, Literal, TypeIs
 
 from .classes import Task, Yieldable
 from .loop import ExecutionLoop
@@ -13,7 +14,6 @@ from .messages import (
     WaitReadable,
     WaitWritable,
 )
-
 
 # ------------------------------------------------------------
 # Configuration
@@ -133,7 +133,7 @@ def print_score() -> None:
 # Helpers
 # ------------------------------------------------------------
 
-def timer_probe(index: int, delay: float, observations: list[tuple[int, float, float]]) -> Generator[Any, Any, None]:
+def timer_probe(index: int, delay: float, observations: list[tuple[int, float, float]]) -> Generator[Any, Any]:
     start = time.monotonic()
 
     yield Sleep(delay)
@@ -142,12 +142,12 @@ def timer_probe(index: int, delay: float, observations: list[tuple[int, float, f
     observations.append((index, delay, elapsed))
 
 
-def order_probe(delay: float, label: str, observations: list[tuple[str, float]]) -> Generator[Any, Any, None]:
+def order_probe(delay: float, label: str, observations: list[tuple[str, float]]) -> Generator[Any, Any]:
     yield Sleep(delay)
     observations.append((label, time.monotonic()))
 
 
-def thread_probe(delay: float, observations: list[float]) -> Generator[Any, Any, None]:
+def thread_probe(delay: float, observations: list[float]) -> Generator[Any, Any]:
     yield ToThread(time.sleep, delay)
     observations.append(time.monotonic())
 
@@ -162,39 +162,39 @@ def delayed_identity(delay: Any, value: Any) -> Any:
     return value
 
 
-def socket_sender(sock: socket.socket) -> Generator[Any, Any, None]:
+def socket_sender(sock: socket.socket) -> Generator[Any, Any]:
     yield Sleep(0.04)
     sock.send(b"x")
 
 
-def socket_sender_payload(sock: socket.socket, delay: float, payload: bytes) -> Generator[Any, Any, None]:
+def socket_sender_payload(sock: socket.socket, delay: float, payload: bytes) -> Generator[Any, Any]:
     yield Sleep(delay)
     sock.sendall(payload)
 
 
-def socket_reader(sock: socket.socket, received: list[bytes]) -> Generator[Any, Any, None]:
+def socket_reader(sock: socket.socket, received: list[bytes]) -> Generator[Any, Any]:
     yield WaitWritable(sock)
     yield WaitReadable(sock)
     received.append(sock.recv(1))
 
 
-def socket_reader_payload(sock: socket.socket, received: list[bytes]) -> Generator[Any, Any, None]:
+def socket_reader_payload(sock: socket.socket, received: list[bytes]) -> Generator[Any, Any]:
     yield WaitReadable(sock)
     received.append(sock.recv(128))
 
 
-def finite_ticker(count: int, period: float, observations: list[float]) -> Generator[Any, Any, None]:
+def finite_ticker(count: int, period: float, observations: list[float]) -> Generator[Any, Any]:
     for _ in range(count):
         yield Sleep(period)
         observations.append(time.monotonic())
 
 
-def short_background_task(index: int, observations: list[tuple[int, float]]) -> Generator[Any, Any, None]:
+def short_background_task(index: int, observations: list[tuple[int, float]]) -> Generator[Any, Any]:
     yield None
     observations.append((index, time.monotonic()))
 
 
-def finite_thread_task(delay: float, observations: list[float]) -> Generator[Any, Any, None]:
+def finite_thread_task(delay: float, observations: list[float]) -> Generator[Any, Any]:
     yield ToThread(time.sleep, delay)
     observations.append(time.monotonic())
 
@@ -203,7 +203,7 @@ def finite_thread_task(delay: float, observations: list[float]) -> Generator[Any
 # 1. Immediate, negative and very short sleeps
 # ------------------------------------------------------------
 
-def test_sleep_edges() -> Generator[Any, Any, None]:
+def test_sleep_edges() -> Generator[Any, Any]:
     measurements: dict[str, float] = {}
 
     for name, delay in (
@@ -236,7 +236,7 @@ def test_sleep_edges() -> Generator[Any, Any, None]:
 # 2. Basic timer accuracy and jitter
 # ------------------------------------------------------------
 
-def test_sleep_accuracy() -> Generator[Any, Any, None]:
+def test_sleep_accuracy() -> Generator[Any, Any]:
     delays: list[float] = [0.002, 0.005, 0.010, 0.020] * 5
     latenesses: list[float] = []
 
@@ -277,7 +277,7 @@ def test_sleep_accuracy() -> Generator[Any, Any, None]:
 # 3. Periodic timers using absolute deadlines
 # ------------------------------------------------------------
 
-def test_periodic_timing() -> Generator[Any, Any, None]:
+def test_periodic_timing() -> Generator[Any, Any]:
     period = 0.025
     count = 24
 
@@ -321,7 +321,7 @@ def test_periodic_timing() -> Generator[Any, Any, None]:
 # 4. Multiple blockers on one task
 # ------------------------------------------------------------
 
-def test_multiple_blockers() -> Generator[Any, Any, None]:
+def test_multiple_blockers() -> Generator[Any, Any]:
     delays = (0.02, 0.05, 0.12)
 
     start = time.monotonic()
@@ -354,7 +354,7 @@ def test_multiple_blockers() -> Generator[Any, Any, None]:
 # 5. Many concurrent timers
 # ------------------------------------------------------------
 
-def test_concurrent_timers() -> Generator[Any, Any, None]:
+def test_concurrent_timers() -> Generator[Any, Any]:
     delays = [
         0.12, 0.02, 0.10, 0.04,
         0.08, 0.03, 0.11, 0.05,
@@ -410,7 +410,7 @@ def test_concurrent_timers() -> Generator[Any, Any, None]:
 # 6. Selector wakeups caused by thread completions
 # ------------------------------------------------------------
 
-def test_thread_wakeups() -> Generator[Any, Any, None]:
+def test_thread_wakeups() -> Generator[Any, Any]:
     delays = (0.015, 0.030, 0.045, 0.060, 0.075, 0.090, 0.105)
     observations: list[float] = []
 
@@ -454,7 +454,7 @@ def test_thread_wakeups() -> Generator[Any, Any, None]:
 # 7. Socket readiness and timers
 # ------------------------------------------------------------
 
-def test_socket_events() -> Generator[Any, Any, None]:
+def test_socket_events() -> Generator[Any, Any]:
     left, right = socket.socketpair()
     left.setblocking(False)
     right.setblocking(False)
@@ -491,13 +491,13 @@ def test_socket_events() -> Generator[Any, Any, None]:
 # 8. AsCompleted streams results while timers keep running
 # ------------------------------------------------------------
 
-def ticker(observations: list[float]) -> Generator[Any, Any, None]:
+def ticker(observations: list[float]) -> Generator[Any, Any]:
     while True:
         yield Sleep(0.025)
         observations.append(time.monotonic())
 
 
-def test_as_completed() -> Generator[Any, Any, None]:
+def test_as_completed() -> Generator[Any, Any]:
     ticks: list[float] = []
     ticker_task = yield Task(ticker(ticks), background=True)
 
@@ -559,7 +559,7 @@ def failing_thread() -> None:
     raise ValueError("expected thread exception")
 
 
-def test_thread_exception() -> Generator[Any, Any, None]:
+def test_thread_exception() -> Generator[Any, Any]:
     caught = False
 
     try:
@@ -581,7 +581,7 @@ def failing_delayed_thread() -> None:
     raise LookupError("expected AsCompleted exception")
 
 
-def test_as_completed_exception() -> Generator[Any, Any, None]:
+def test_as_completed_exception() -> Generator[Any, Any]:
     caught = False
 
     operations: list[ToThread[tuple[Any, float] | None, Any]] = [
@@ -605,7 +605,7 @@ def test_as_completed_exception() -> Generator[Any, Any, None]:
 # 11. Background task stopping while sleeping
 # ------------------------------------------------------------
 
-def stoppable_ticker(events: list[tuple[str, float]]) -> Generator[Any, Any, None]:
+def stoppable_ticker(events: list[tuple[str, float]]) -> Generator[Any, Any]:
     try:
         while True:
             yield Sleep(0)
@@ -614,7 +614,7 @@ def stoppable_ticker(events: list[tuple[str, float]]) -> Generator[Any, Any, Non
         events.append(("closed", time.monotonic()))
 
 
-def test_background_stop() -> Generator[Any, Any, None]:
+def test_background_stop() -> Generator[Any, Any]:
     events: list[tuple[str, float]] = []
 
     task = yield Task(
@@ -664,7 +664,7 @@ def test_background_stop() -> Generator[Any, Any, None]:
 # 12. Ready-queue fairness
 # ------------------------------------------------------------
 
-def cooperative_spinner(duration: float) -> Generator[Any, Any, None]:
+def cooperative_spinner(duration: float) -> Generator[Any, Any]:
     deadline = time.monotonic() + duration
 
     while time.monotonic() < deadline:
@@ -676,7 +676,7 @@ def cooperative_spinner(duration: float) -> Generator[Any, Any, None]:
         yield None
 
 
-def test_ready_queue_fairness() -> Generator[Any, Any, None]:
+def test_ready_queue_fairness() -> Generator[Any, Any]:
     yield Task(
         cooperative_spinner(0.06),
         background=True,
@@ -711,7 +711,7 @@ def test_ready_queue_fairness() -> Generator[Any, Any, None]:
 # 13. Timers should complete in deadline order
 # ------------------------------------------------------------
 
-def test_sleep_deadline_order() -> Generator[Any, Any, None]:
+def test_sleep_deadline_order() -> Generator[Any, Any]:
     delays = (
         (0.015, "first"),
         (0.045, "second"),
@@ -747,7 +747,7 @@ def test_sleep_deadline_order() -> Generator[Any, Any, None]:
 # 14. High timer fan-out
 # ------------------------------------------------------------
 
-def test_sleep_fanout() -> Generator[Any, Any, None]:
+def test_sleep_fanout() -> Generator[Any, Any]:
     count = 64
     observations: list[tuple[int, float, float]] = []
 
@@ -799,7 +799,7 @@ def test_sleep_fanout() -> Generator[Any, Any, None]:
 # 15. Mixed Message blockers
 # ------------------------------------------------------------
 
-def test_mixed_message_blockers() -> Generator[Any, Any, None]:
+def test_mixed_message_blockers() -> Generator[Any, Any]:
     start = time.monotonic()
 
     yield Messages([
@@ -835,7 +835,7 @@ def test_mixed_message_blockers() -> Generator[Any, Any, None]:
 # 16. WaitWritable independently
 # ------------------------------------------------------------
 
-def test_socket_writable() -> Generator[Any, Any, None]:
+def test_socket_writable() -> Generator[Any, Any]:
     left, right = socket.socketpair()
     left.setblocking(False)
     right.setblocking(False)
@@ -862,7 +862,7 @@ def test_socket_writable() -> Generator[Any, Any, None]:
 # 17. WaitReadable delivers the complete payload
 # ------------------------------------------------------------
 
-def test_socket_payload() -> Generator[Any, Any, None]:
+def test_socket_payload() -> Generator[Any, Any]:
     left, right = socket.socketpair()
     left.setblocking(False)
     right.setblocking(False)
@@ -896,7 +896,7 @@ def test_socket_payload() -> Generator[Any, Any, None]:
 # 18. Peer closure should wake WaitReadable
 # ------------------------------------------------------------
 
-def test_socket_eof() -> Generator[Any, Any, None]:
+def test_socket_eof() -> Generator[Any, Any]:
     left, right = socket.socketpair()
     left.setblocking(False)
 
@@ -921,7 +921,7 @@ def test_socket_eof() -> Generator[Any, Any, None]:
 # 19. Multiple independent socket pairs
 # ------------------------------------------------------------
 
-def test_socket_multiple_pairs() -> Generator[Any, Any, None]:
+def test_socket_multiple_pairs() -> Generator[Any, Any]:
     pairs = [socket.socketpair() for _ in range(2)]
 
     for left, right in pairs:
@@ -964,7 +964,7 @@ def test_socket_multiple_pairs() -> Generator[Any, Any, None]:
 # 20. ToThread return-value propagation
 # ------------------------------------------------------------
 
-def test_thread_return_value() -> Generator[Any, Any, None]:
+def test_thread_return_value() -> Generator[Any, Any]:
     result = yield ToThread(pow, 2, 10)
 
     check(
@@ -983,7 +983,7 @@ def thread_transform(value: int, *, multiplier: int, offset: int) -> int:
     return value * multiplier + offset
 
 
-def test_thread_keyword_arguments() -> Generator[Any, Any, None]:
+def test_thread_keyword_arguments() -> Generator[Any, Any]:
     result = yield ToThread(
         thread_transform,
         7,
@@ -1003,7 +1003,7 @@ def test_thread_keyword_arguments() -> Generator[Any, Any, None]:
 # 22. ToThread operations should run concurrently
 # ------------------------------------------------------------
 
-def test_thread_parallelism() -> Generator[Any, Any, None]:
+def test_thread_parallelism() -> Generator[Any, Any]:
     count = 4
     delay = 0.08
 
@@ -1047,7 +1047,7 @@ def test_thread_parallelism() -> Generator[Any, Any, None]:
 # 23. AsCompleted should yield the first result early
 # ------------------------------------------------------------
 
-def test_as_completed_first_result() -> Generator[Any, Any, None]:
+def test_as_completed_first_result() -> Generator[Any, Any]:
     operations = [
         ToThread(delayed_return, 0.14, "slow"),
         ToThread(delayed_return, 0.08, "middle"),
@@ -1103,7 +1103,7 @@ def test_as_completed_first_result() -> Generator[Any, Any, None]:
 # 24. AsCompleted with a larger batch
 # ------------------------------------------------------------
 
-def test_as_completed_batch() -> Generator[Any, Any, None]:
+def test_as_completed_batch() -> Generator[Any, Any]:
     delays = (0.07, 0.02, 0.06, 0.03, 0.05, 0.04)
 
     operations = [
@@ -1150,7 +1150,7 @@ def test_as_completed_batch() -> Generator[Any, Any, None]:
 # 25. AsCompleted should preserve arbitrary result types
 # ------------------------------------------------------------
 
-def test_as_completed_value_types() -> Generator[Any, Any, None]:
+def test_as_completed_value_types() -> Generator[Any, Any]:
     marker = object()
     dictionary = {"value": 42}
     sequence = [1, 2, 3]
@@ -1187,7 +1187,7 @@ def test_as_completed_value_types() -> Generator[Any, Any, None]:
 # 26. Callable child Task return value
 # ------------------------------------------------------------
 
-def test_child_callable_result() -> Generator[Any, Any, None]:
+def test_child_callable_result() -> Generator[Any, Any]:
     result = yield Task(lambda: 42)
 
     check(
@@ -1207,7 +1207,7 @@ def returning_generator(value: int) -> Generator[Any, Any, Any]:
     return value
 
 
-def test_child_generator_result() -> Generator[Any, Any, None]:
+def test_child_generator_result() -> Generator[Any, Any]:
     result = yield Task(returning_generator(123))
 
     check(
@@ -1232,7 +1232,7 @@ def nested_middle() -> Generator[Any, Any, int]:
     return value * 7
 
 
-def test_nested_child_result() -> Generator[Any, Any, None]:
+def test_nested_child_result() -> Generator[Any, Any]:
     result = yield Task(nested_middle())
 
     check(
@@ -1251,7 +1251,7 @@ def task_argument_function(first: str, second: str, *, separator: str) -> str:
     return f"{first}{separator}{second}"
 
 
-def test_task_argument_forwarding() -> Generator[Any, Any, None]:
+def test_task_argument_forwarding() -> Generator[Any, Any]:
     result = yield Task(
         task_argument_function,
         "left",
@@ -1275,7 +1275,7 @@ def yieldable_sync_function(value: int, *, multiplier: int) -> int:
     return value * multiplier
 
 
-def test_yieldable_callable() -> Generator[Any, Any, None]:
+def test_yieldable_callable() -> Generator[Any, Any]:
     wrapped = Yieldable(yieldable_sync_function)
 
     result = yield wrapped(9, multiplier=5)
@@ -1297,7 +1297,7 @@ def yieldable_generator_function(value: int, *, increment: int) -> Generator[Any
     return value + increment
 
 
-def test_yieldable_generator_arguments() -> Generator[Any, Any, None]:
+def test_yieldable_generator_arguments() -> Generator[Any, Any]:
     wrapped = Yieldable(yieldable_generator_function)
 
     result = yield wrapped(10, increment=5)
@@ -1314,10 +1314,10 @@ def test_yieldable_generator_arguments() -> Generator[Any, Any, None]:
 # 32. Plain yielded values should resume the generator
 # ------------------------------------------------------------
 
-def test_plain_yield_resumption() -> Generator[Any, Any, None]:
+def test_plain_yield_resumption() -> Generator[Any, Any]:
     events: list[tuple[str, float]] = []
 
-    def worker() -> Generator[Any, Any, None]:
+    def worker() -> Generator[Any, Any]:
         for index in range(5):
             events.append(("before", index))
             yield None
@@ -1346,10 +1346,10 @@ def test_plain_yield_resumption() -> Generator[Any, Any, None]:
 # 33. Generator finally block on natural completion
 # ------------------------------------------------------------
 
-def test_natural_generator_cleanup() -> Generator[Any, Any, None]:
+def test_natural_generator_cleanup() -> Generator[Any, Any]:
     events: list[str] = []
 
-    def worker() -> Generator[Any, Any, None]:
+    def worker() -> Generator[Any, Any]:
         try:
             yield Sleep(0.005)
             yield None
@@ -1373,13 +1373,13 @@ def test_natural_generator_cleanup() -> Generator[Any, Any, None]:
 # 34. Background task should not block its parent
 # ------------------------------------------------------------
 
-def delayed_background_worker(events: list[str]) -> Generator[Any, Any, None]:
+def delayed_background_worker(events: list[str]) -> Generator[Any, Any]:
     events.append("started")
     yield Sleep(0.05)
     events.append("finished")
 
 
-def test_background_parent_resumption() -> Generator[Any, Any, None]:
+def test_background_parent_resumption() -> Generator[Any, Any]:
     events: list[str] = []
 
     start = time.monotonic()
@@ -1417,13 +1417,13 @@ def test_background_parent_resumption() -> Generator[Any, Any, None]:
 # 35. Multiple independent background workers
 # ------------------------------------------------------------
 
-def background_worker(index: int, observations: list[tuple[int, float]]) -> Generator[Any, Any, None]:
+def background_worker(index: int, observations: list[tuple[int, float]]) -> Generator[Any, Any]:
     for iteration in range(3):
         yield Sleep(0.006)
         observations.append((index, iteration))
 
 
-def test_multiple_background_workers() -> Generator[Any, Any, None]:
+def test_multiple_background_workers() -> Generator[Any, Any]:
     count = 6
     observations: list[tuple[int, float]] = []
 
@@ -1462,7 +1462,7 @@ def test_multiple_background_workers() -> Generator[Any, Any, None]:
 # 36. High task count
 # ------------------------------------------------------------
 
-def test_high_task_count() -> Generator[Any, Any, None]:
+def test_high_task_count() -> Generator[Any, Any]:
     count = 96
     observations: list[tuple[int, float]] = []
 
@@ -1503,7 +1503,7 @@ def test_high_task_count() -> Generator[Any, Any, None]:
 # 37. Mixed thread and timer workload
 # ------------------------------------------------------------
 
-def test_mixed_thread_timer_load() -> Generator[Any, Any, None]:
+def test_mixed_thread_timer_load() -> Generator[Any, Any]:
     thread_observations: list[float] = []
     timer_observations: list[float] = []
 
@@ -1559,7 +1559,7 @@ def test_mixed_thread_timer_load() -> Generator[Any, Any, None]:
 # Main
 # ============================================================
 
-def main() -> Generator[Any, Any, None]:
+def main() -> Generator[Any, Any]:
     PASSED.clear()
     METRICS.clear()
 
@@ -1631,5 +1631,6 @@ def main() -> Generator[Any, Any, None]:
     print_score()
 
 from .scheduler import EEVDFScheduler
+
 if __name__ == "__main__":
     ExecutionLoop(EEVDFScheduler).run(Yieldable(main))

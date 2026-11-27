@@ -1,20 +1,29 @@
-from concurrent.futures import ThreadPoolExecutor, Future
-from typing import Any, Generator, Type, cast
-from .exceptions import NoEventLoopException, TaskTimeoutError
-from contextlib import contextmanager
-from selectors import SelectorKey
-from collections import deque
-from queue import SimpleQueue
-import selectors
-import itertools
-import socket
 import heapq
+import itertools
+import selectors
+import socket
 import time
+from collections import deque
+from collections.abc import Generator
+from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import contextmanager, suppress
+from queue import SimpleQueue
+from selectors import SelectorKey
+from typing import Any, cast
 
-lazy from .messages import Message, BackgroundMessage, MessageWithSocket, Messages, AsCompleted, Accept
+from .exceptions import NoEventLoopException, TaskTimeoutError
 lazy from .classes import Task, Yieldable
+lazy from .messages import (
+    Accept,
+    AsCompleted,
+    BackgroundMessage,
+    Message,
+    Messages,
+    MessageWithSocket,
+)
 lazy from .scheduler import BaseScheduler
 lazy from .utils import log
+
 
 class _DequeScheduler(BaseScheduler):
     def __init__(self):
@@ -66,7 +75,7 @@ def _background_message[T](message: BackgroundMessage) -> Generator[BackgroundMe
 
 _loop: ExecutionLoop | None = None
 class ExecutionLoop:
-    def __init__(self, scheduler: Type[BaseScheduler] | None = None):
+    def __init__(self, scheduler: type[BaseScheduler] | None = None):
         self.scheduler: BaseScheduler = (scheduler or _DequeScheduler)()
         self._run_frames: list[dict[str, float]] = []
 
@@ -187,7 +196,7 @@ class ExecutionLoop:
         data = key.data
         if not isinstance(data, dict) or message not in data:
             return
-        data = dict(cast(dict[Any, Any], data))
+        data = dict(cast('dict[Any, Any]', data))
         del data[message]
         if data:
             self.selector.modify(key.fileobj, key.events, data)
@@ -290,6 +299,57 @@ class ExecutionLoop:
 
             self.scheduler.account(task, runtime)
 
+        result = self._check_task_timeout(task, result)
+
+        parent = task.parent
+
+        self._resolve_joiners(task)
+
+        if parent is task and task.done:
+            if task.exception is not None:
+                raise task.exception
+            return
+
+        if task.exception is not None:
+            if parent is not None:
+                parent.throw_value(task.exception)
+                self.schedule(parent, parent.parent, immediate=True)
+            return
+
+        if result is _NOTREADY:
+            return
+
+        if isinstance(result, BackgroundMessage) and result.background:
+            result = Task(_background_message(result), background=True, immediate=True)
+
+        if isinstance(result, Task) and not task.done:
+            log(f'{result.immediate=}')
+            log(f'{result.background=}')
+            if result.background:
+                self.schedule(cast('Task[Any]', result), immediate=result.immediate)
+                task.return_value(result)
+                self.schedule(task, task.parent, immediate=True)
+                return
+            self.schedule(cast('Task[Any]', result), task, immediate=result.immediate)
+            return
+
+        if isinstance(result, Message):
+            self.handle_message(task, result)
+            return
+
+        if isinstance(result, Messages):
+            for message in result.messages:
+                self.handle_message(task, message)
+            return
+
+        if parent is not None:
+            parent.return_value(result)
+            log('Rescheduling immediately')
+            self.schedule(parent, parent.parent, immediate=True)
+        elif not task.done:
+            self.schedule(task)
+
+    def _check_task_timeout(self, task: Task, result: Any) -> Any:
         deadline = task._timeout_deadline
         timed_out_now = deadline is not None and time.monotonic() >= deadline
         if timed_out_now and not task._timeout_expired:
@@ -314,65 +374,21 @@ class ExecutionLoop:
 
         if task.done:
             self._clear_task_timeout(task)
+        return result
 
-        parent = task.parent
-
-        if task.done and task._joiners:
-            for message, waiter in task._joiners:
-                self.pending -= 1
-                if isinstance(message, BackgroundMessage):
-                    message.task_completed(task, waiter)
-                else:
-                    message.resolve([])
-                    waiter.return_value(task.result)
-                if waiter.is_ready:
-                    self.schedule(waiter)
-            task._joiners.clear()
-
-        if parent is task and task.done:
-            if task.exception is not None:
-                raise task.exception
+    def _resolve_joiners(self, task: Task) -> None:
+        if not (task.done and task._joiners):
             return
-
-        if task.exception is not None:
-            if parent is not None:
-                parent.throw_value(task.exception)
-                self.schedule(parent, parent.parent, immediate=True)
-            return
-
-        if result is _NOTREADY:
-            return
-
-        if isinstance(result, BackgroundMessage) and result.background:
-            result = Task(_background_message(result), background=True, immediate=True)
-
-        if isinstance(result, Task) and not task.done:
-            log(f'{result.immediate=}')
-            log(f'{result.background=}')
-            if result.background:
-                self.schedule(cast(Task[Any], result), immediate=result.immediate)
-                task.return_value(result)
-                self.schedule(task, task.parent, immediate=True)
-                return
+        for message, waiter in task._joiners:
+            self.pending -= 1
+            if isinstance(message, BackgroundMessage):
+                message.task_completed(task, waiter)
             else:
-                self.schedule(cast(Task[Any], result), task, immediate=result.immediate)
-            return
-
-        if isinstance(result, Message):
-            self.handle_message(task, result)
-            return
-
-        if isinstance(result, Messages):
-            for message in result.messages:
-                self.handle_message(task, message)
-            return
-
-        if parent is not None:
-            parent.return_value(result)
-            log('Rescheduling immediately')
-            self.schedule(parent, parent.parent, immediate=True)
-        elif not task.done:
-            self.schedule(task)
+                message.resolve([])
+                waiter.return_value(task.result)
+            if waiter.is_ready:
+                self.schedule(waiter)
+        task._joiners.clear()
 
     def run(self, initial: Yieldable | Task | None = None):
         try:
@@ -462,7 +478,7 @@ class ExecutionLoop:
                 self.pending -= 1
                 message._pending_count -= 1
 
-                message = cast(AsCompleted[Any], message)
+                message = cast('AsCompleted[Any]', message)
 
                 if message.receive(task, future):
                     task.return_value(iter(message))
@@ -487,10 +503,8 @@ class ExecutionLoop:
     def thread_completed(self, message: Message, task: Task, future: Future[Any]):
         self.completed.put((message, task, future))
 
-        try:
+        with suppress(BlockingIOError):
             self.wakeup_w.send(b'\0')
-        except BlockingIOError:
-            pass
 
     def shutdown(self):
         self.executor.shutdown(wait=not self._has_timed_out_work, cancel_futures=self._has_timed_out_work)

@@ -1,14 +1,12 @@
 
-import os
 
-from .typing import ReturnsAfter, LiteralType
-from .scheduler import EEVDFScheduler
-from .classes import Yieldable, Task, File
+from typing import Any
+
+from .classes import Task, Yieldable
 from .loop import ExecutionLoop
 from .messages import *
+from .scheduler import EEVDFScheduler
 
-from typing import Any, Generator, Literal
-import time
 
 def gen():
     yield Sleep(1)

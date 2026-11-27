@@ -1,11 +1,11 @@
-from dataclasses import dataclass, field
-from math import ceil
-from time import perf_counter
 import argparse
+import contextlib
 import errno
 import select
 import socket
-
+from dataclasses import dataclass, field
+from math import ceil
+from time import perf_counter
 
 _HEADER_END = b"\r\n\r\n"
 _EPOLL_WRITE = select.EPOLLOUT | select.EPOLLET
@@ -62,9 +62,18 @@ class Config:
 
 class Request:
     __slots__ = (
-        "sock", "fd", "started", "expires", "phase", "sent",
-        "registered", "header_buffer", "headers_done", "body_received",
-        "content_length", "status",
+        "body_received",
+        "content_length",
+        "expires",
+        "fd",
+        "header_buffer",
+        "headers_done",
+        "phase",
+        "registered",
+        "sent",
+        "sock",
+        "started",
+        "status",
     )
 
     def __init__(self) -> None:
@@ -142,7 +151,8 @@ def parse_headers(request: Request) -> None:
     second_space = status_line.find(b" ", first_space + 1)
     status_bytes = status_line[first_space + 1:second_space if second_space >= 0 else None]
     if first_space < 0 or not status_bytes.isdigit():
-        raise ValueError(f"Invalid HTTP status line: {status_line!r}")
+        msg = f"Invalid HTTP status line: {status_line!r}"
+        raise ValueError(msg)
     request.status = int(status_bytes)
 
     for line in lines[1:]:
@@ -240,10 +250,8 @@ def benchmark(config: Config) -> None:
     def close_request(request: Request) -> None:
         active.pop(request.fd, None)
         if request.registered:
-            try:
+            with contextlib.suppress(KeyError, ValueError):
                 poller.unregister(request.fd)
-            except (KeyError, ValueError):
-                pass
         sock = request.sock
         request.sock = None
         request.registered = False
@@ -288,10 +296,8 @@ def benchmark(config: Config) -> None:
                 raise OSError(error, "socket connection failed")
         except Exception as exc:
             if request.registered:
-                try:
+                with contextlib.suppress(KeyError, ValueError):
                     poller.unregister(request.fd)
-                except (KeyError, ValueError):
-                    pass
             if sock is not None:
                 sock.close()
             request.sock = None

@@ -1,5 +1,6 @@
-from typing import Any
 import sys
+from typing import Any
+
 
 def log(*args: Any, **kwargs: Any):
     if not DEBUG: return

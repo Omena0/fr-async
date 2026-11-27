@@ -1,16 +1,16 @@
 """Example HTTP server built with the nonblocking socket accept message."""
 
-from urllib.parse import unquote_to_bytes
-from typing import Any, Generator
-from pathlib import Path
-import traceback
-import socket
-import time
 import os
+import socket
+import traceback
+from collections.abc import Generator
+from pathlib import Path
+from typing import Any
+from urllib.parse import unquote_to_bytes
 
-from .messages import Accept, WaitReadable, WaitWritable, Sleep, FileRead
-from .classes import TaskGroup, Yieldable, Task, File
+from .classes import File, Task, Yieldable
 from .loop import ExecutionLoop, getEventLoop
+from .messages import Accept, FileRead, WaitReadable, WaitWritable
 from .scheduler import EEVDFScheduler
 
 DEBUG = True
@@ -74,7 +74,7 @@ def handle_request(request: bytes) -> Generator[FileRead[bytes], Any, bytes]:
     return make_http(content)
 
 serve_root = b'static'
-def serve(client: socket.socket, address: tuple[str, int]) -> Generator[Any, Any, None]:
+def serve(client: socket.socket, address: tuple[str, int]) -> Generator[Any, Any]:
     """Accept clients and send each one a short response."""
     try:
         yield WaitReadable(client)

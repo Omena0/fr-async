@@ -1,4 +1,5 @@
-from typing import Annotated, Any
+from typing import Annotated
+
 
 class _InferYieldType:
     __slots__ = ()

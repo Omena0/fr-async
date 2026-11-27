@@ -1,17 +1,18 @@
-from ast import Return
-from typing import Iterable, Callable, IO, Literal, Tuple, final, Any, Generator, List, overload
-from concurrent.futures import Future
-from collections import deque
+import heapq
 import selectors
 import socket
-import heapq
 import time
+from collections import deque
+from collections.abc import Callable, Generator, Iterable
+from concurrent.futures import Future
+from typing import IO, Any, final, overload
 
-lazy from .loop import getEventLoop, ExecutionLoop
-lazy from .typing import LiteralType, ReturnsAfter, YieldTypeIs
-lazy from .exceptions import NoEventLoopException
 lazy from .classes import Task
+lazy from .exceptions import NoEventLoopException
+lazy from .loop import ExecutionLoop, getEventLoop
+lazy from .typing import LiteralType, ReturnsAfter, YieldTypeIs
 lazy from .utils import log
+
 
 # Check if a set of blockers are resolved
 def check_resolved(blockers: deque[Message]) -> bool:
@@ -39,7 +40,7 @@ def register_event(self: MessageWithSocket, task: Task, event: int):
 # Event loop messaging base classes
 class Message:
     """Base class for values yielded to the event loop to request an operation."""
-    __slots__ = ('_resolved', '_pending_count')
+    __slots__ = ('_pending_count', '_resolved')
 
     _type = 'None'
     _reg_type = 'None'
@@ -80,11 +81,9 @@ class Message:
 
     def register(self, task: Task) -> Any:
         """Register this message with the event loop for a task."""
-        ...
 
     def execute(self) -> Any:
         """Perform the blocking operation represented by this message."""
-        ...
 
 class BackgroundMessage(Message):
     'A message that can run in a detached task when background mode is enabled.'
@@ -210,17 +209,15 @@ class Accept(MessageWithSocket, YieldTypeIs[ReturnsAfter[None, list[tuple[socket
 # Send to thread (for blocking tasks)
 class ToThread[T, **P](BackgroundMessage, YieldTypeIs[T]):
     'Run a callable in the event loop thread pool and return its result.'
-    __slots__ = ('func', 'args', 'kwargs', 'future', 'result')
+    __slots__ = ('args', 'func', 'future', 'kwargs', 'result')
 
     _type = 'register'
     @overload
     def __init__(self, func: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> None:
         """Typing overload for calls matching the wrapped callable."""
-        ...
     @overload
     def __init__(self, func: Callable[..., T], /, *args: Any, background: bool = False, **kwargs: Any) -> None:
         """Typing overload for calls with a background option."""
-        ...
     def __init__(self, func: Callable[..., T], /, *args: Any, background: bool = False, **kwargs: Any) -> None:
         'Store the callable, arguments, and background mode.'
         super().__init__(background=background)
@@ -243,7 +240,7 @@ class ToThread[T, **P](BackgroundMessage, YieldTypeIs[T]):
 
 class AsCompleted[T](BackgroundMessage, YieldTypeIs[ReturnsAfter[None, Generator[T]]]):
     'Run thread operations and yield results as they complete.'
-    __slots__ = ('operations', 'completed', 'loop')
+    __slots__ = ('completed', 'loop', 'operations')
 
     _type = 'register'
     _reg_type = 'as_completed'
@@ -252,7 +249,7 @@ class AsCompleted[T](BackgroundMessage, YieldTypeIs[ReturnsAfter[None, Generator
         'Store operations and initialize completion tracking.'
         super().__init__(background=background)
         self.operations: tuple[ToThread[T, Any], ...] = operations
-        self.completed: deque[Tuple[Any, BaseException | None]] = deque()
+        self.completed: deque[tuple[Any, BaseException | None]] = deque()
         self._pending_count: int = len(operations)
         self.loop: ExecutionLoop | None = None
 
@@ -289,7 +286,7 @@ class AsCompleted[T](BackgroundMessage, YieldTypeIs[ReturnsAfter[None, Generator
 
         return False
 
-    def __iter__(self) -> Generator[Any, Any, None]:
+    def __iter__(self) -> Generator[Any, Any]:
         'Yield results in completion order, raising any operation error.'
         if self.loop is None:
             raise NoEventLoopException("No event loop started.")
@@ -334,7 +331,7 @@ class TaskJoin[T](BackgroundMessage, YieldTypeIs[ReturnsAfter[None, T]]):
 
 class TaskGroupCollect[T](BackgroundMessage, YieldTypeIs[ReturnsAfter[None, list[T]]]):
     'Wait for all target tasks and return results in target order.'
-    __slots__ = ('targets', 'results', 'indices')
+    __slots__ = ('indices', 'results', 'targets')
 
     _type = 'register'
 
@@ -371,7 +368,7 @@ class TaskGroupCollect[T](BackgroundMessage, YieldTypeIs[ReturnsAfter[None, list
 
 class TaskGroupAsCompleted[T](BackgroundMessage, YieldTypeIs[ReturnsAfter[None, Generator[T]]]):
     'Wait for target tasks and expose results in completion order.'
-    __slots__ = ('targets', 'completed', 'loop')
+    __slots__ = ('completed', 'loop', 'targets')
 
     _type = 'register'
     _reg_type = 'as_completed'
@@ -404,7 +401,7 @@ class TaskGroupAsCompleted[T](BackgroundMessage, YieldTypeIs[ReturnsAfter[None, 
             self.resolve([])
             waiter.return_value(iter(self))
 
-    def __iter__(self) -> Generator[T, None, None]:
+    def __iter__(self) -> Generator[T]:
         'Yield results in completion order while driving the event loop.'
         if self.loop is None:
             raise NoEventLoopException('No event loop started.')
@@ -444,7 +441,7 @@ class FileRead[T: (str, bytes)](BackgroundMessage, YieldTypeIs[T]):
 
 class FileWrite[T: (str, bytes)](BackgroundMessage, YieldTypeIs[int]):
     'Write data to a file in the event loop thread pool.'
-    __slots__ = ('file', 'data')
+    __slots__ = ('data', 'file')
 
     _type = 'execute'
     def __init__(self, file: IO[T], data: T, *, background: bool = False):
@@ -462,18 +459,18 @@ class FileWrite[T: (str, bytes)](BackgroundMessage, YieldTypeIs[int]):
 
 
 __all__ = [
-    'Message',
-    'BackgroundMessage',
-    'Messages',
-    'Sleep',
-    'WaitReadable',
-    'WaitWritable',
     'Accept',
-    'ToThread',
     'AsCompleted',
-    'TaskJoin',
-    'TaskGroupCollect',
-    'TaskGroupAsCompleted',
+    'BackgroundMessage',
     'FileRead',
     'FileWrite',
+    'Message',
+    'Messages',
+    'Sleep',
+    'TaskGroupAsCompleted',
+    'TaskGroupCollect',
+    'TaskJoin',
+    'ToThread',
+    'WaitReadable',
+    'WaitWritable',
 ]

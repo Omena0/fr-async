@@ -1,9 +1,12 @@
-from dataclasses import dataclass
-from fr_async.classes import Task
-from math import exp, isfinite
-from itertools import count
-from typing import Any
 import time
+from dataclasses import dataclass
+from itertools import count
+from math import exp, isfinite
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from fr_async.classes import Task
+
 
 class BaseScheduler:
     __slots__ = ()
@@ -33,8 +36,15 @@ class _Entity:
 
 class EEVDFScheduler(BaseScheduler):
     __slots__ = (
-        'default_slice', 'sleep_decay', '_entities', '_queued', '_sequence',
-        '_vtime', '_queued_weight', '_queued_weighted_runtime', '_immediate',
+        '_entities',
+        '_immediate',
+        '_queued',
+        '_queued_weight',
+        '_queued_weighted_runtime',
+        '_sequence',
+        '_vtime',
+        'default_slice',
+        'sleep_decay',
     )
 
     def __init__(
@@ -140,40 +150,39 @@ class EEVDFScheduler(BaseScheduler):
                 self._immediate.append((entry.sequence, task))
             return
 
-        else:
-            # Reinsert an entity while preserving its lag.
-            if entry.inactive_since is not None:
-                now = time.monotonic()
-                inactive_for = max(0.0, now - entry.inactive_since)
+        # Reinsert an entity while preserving its lag.
+        elif entry.inactive_since is not None:
+            now = time.monotonic()
+            inactive_for = max(0.0, now - entry.inactive_since)
 
-                lag = entry.lag
+            lag = entry.lag
 
-                if self.sleep_decay is not None:
-                    lag *= exp(-inactive_for / self.sleep_decay)
+            if self.sleep_decay is not None:
+                lag *= exp(-inactive_for / self.sleep_decay)
 
-                vruntime, total_weight = self._average()
-                remaining = max(0.0, entry.deadline - entry.vruntime)
+            vruntime, total_weight = self._average()
+            remaining = max(0.0, entry.deadline - entry.vruntime)
 
-                if total_weight:
-                    entry.vruntime = (
-                        vruntime
-                        - lag * (total_weight + entry.weight) / total_weight
-                    )
-                else:
-                    entry.vruntime = vruntime
-                    lag = 0.0
+            if total_weight:
+                entry.vruntime = (
+                    vruntime
+                    - lag * (total_weight + entry.weight) / total_weight
+                )
+            else:
+                entry.vruntime = vruntime
+                lag = 0.0
 
-                entry.lag = lag
+            entry.lag = lag
 
-                if remaining:
-                    entry.deadline = entry.vruntime + remaining
-                else:
-                    entry.deadline = (
-                        entry.vruntime
-                        + entry.time_slice * NICE_0_LOAD / entry.weight
-                    )
+            if remaining:
+                entry.deadline = entry.vruntime + remaining
+            else:
+                entry.deadline = (
+                    entry.vruntime
+                    + entry.time_slice * NICE_0_LOAD / entry.weight
+                )
 
-                entry.inactive_since = None
+            entry.inactive_since = None
 
         entry.sequence = next(self._sequence)
         entry.immediate = immediate

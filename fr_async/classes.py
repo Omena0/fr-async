@@ -1,19 +1,28 @@
-from typing import Generator, Callable, Any, TypeIs, Literal, IO, Final, overload, Self
-from contextvars import Context, copy_context
-from collections import deque
-from os import PathLike
 import inspect
 import os
+from collections import deque
+from collections.abc import Callable, Generator
+from contextvars import Context, copy_context
+from os import PathLike
+from typing import IO, Any, Final, Literal, Self, TypeIs, overload
 
-lazy from .messages import Message, check_resolved, FileWrite, FileRead, TaskJoin, TaskGroupCollect, TaskGroupAsCompleted
 lazy from .loop import getEventLoop
+lazy from .messages import (
+    FileRead,
+    FileWrite,
+    Message,
+    TaskGroupAsCompleted,
+    TaskGroupCollect,
+    TaskJoin,
+    check_resolved,
+)
 lazy from .utils import log
+
 
 class _Missing:
     """Sentinel type used to distinguish a missing value."""
     __slots__ = ()
 
-    ...
 _MISSING = _Missing()
 
 class Assignable:
@@ -30,6 +39,7 @@ class Assignable:
             return super().__setattr__(name, value)
 
         self._data[name] = value
+        return None
 
     def __getattr__(self, name: str):
         'Look up an attribute in the internal mapping.'
@@ -50,10 +60,26 @@ def _is_generator(x: Any) -> TypeIs[Generator[Any, Any, Any]]:
 class Task[T=Any]:
     'Represent a callable or generator managed by the event loop.'
     __slots__ = (
-        'func', 'immediate', 'background', 'args', 'kwargs', 'parent', 'done',
-        'result', 'exception', 'timeout', '_timeout_deadline',
-        '_timeout_started', '_timeout_expired', '_joiners', 'data',
-        '_stop_requested', '_return_val', '_throw_val', 'wait_for', '_context',
+        '_context',
+        '_joiners',
+        '_return_val',
+        '_stop_requested',
+        '_throw_val',
+        '_timeout_deadline',
+        '_timeout_expired',
+        '_timeout_started',
+        'args',
+        'background',
+        'data',
+        'done',
+        'exception',
+        'func',
+        'immediate',
+        'kwargs',
+        'parent',
+        'result',
+        'timeout',
+        'wait_for',
     )
 
     def __init__(self, func: Generator[Any, Any, T] | Callable[..., T], *args: Any, background=False, immediate=False, parent: Task | None = None, data: dict[Any, Any] | None = None, timeout: float | None = None, **kwargs: Any):
@@ -178,7 +204,7 @@ type OpenMode = OpenTextMode | OpenBinaryMode
 
 class File[T: (str, bytes)]:
     'Wrap a text or binary file and expose event loop file operations.'
-    __slots__ = ('_file', '_binary')
+    __slots__ = ('_binary', '_file')
 
     @overload
     def __init__(
@@ -193,7 +219,6 @@ class File[T: (str, bytes)]:
             opener: Callable[[str, int], int] | None = None
         ) -> None:
         """Typing overload for opening a binary file."""
-        ...
     @overload
     def __init__(
             self: File[str],
@@ -207,7 +232,6 @@ class File[T: (str, bytes)]:
             opener: Callable[[str, int], int] | None = None
         ) -> None:
         """Typing overload for opening a text file."""
-        ...
     def __init__(
             self,
             path: FilePath,
@@ -248,7 +272,7 @@ class File[T: (str, bytes)]:
 # Task group
 class TaskGroup:
     'Collect tasks for coordinated scheduling, cancellation, and result handling.'
-    __slots__ = ('tasks', 'started')
+    __slots__ = ('started', 'tasks')
 
     def __init__(self) -> None:
         'Create an empty task group that has not started.'
