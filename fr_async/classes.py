@@ -1,5 +1,5 @@
 from typing import IO, Any, Final, Self, TypeIs, overload
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Iterator
 from contextvars import Context, copy_context
 from collections import deque
 import inspect
@@ -147,10 +147,18 @@ class Task[T=Any]:
         name: str = getattr(self.func, '__name__', str(self.func))
         return f"Task({name}, {self.args}, {self.kwargs})"
 
+    @staticmethod
+    def get_current() -> Task | None:
+        return getEventLoop()._current_task
+
     @property
     def is_ready(self):
         'Return whether all messages blocking this task are resolved.'
         return check_resolved(self.wait_for)
+
+    def copy_context(self) -> Context:
+        'Return a copy of the contextvars context this task runs in.'
+        return self._context.copy()
 
     def throw_value(self, exc: Any):
         'Schedule an exception to throw into the task generator.'
@@ -165,9 +173,9 @@ class Task[T=Any]:
         'Request that the task stop when it next runs.'
         self._stop_requested = True
 
-    def join(self, *, background: bool = False) -> TaskJoin[T]:
+    def join(self, *, background: bool = False, timeout: float | None = None) -> TaskJoin[T]:
         """Wait for this task to finish and return its result."""
-        return TaskJoin(self, background=background)
+        return TaskJoin(self, background=background, timeout=timeout)
 
 # Task factory function wrapper
 class Yieldable:
@@ -258,16 +266,16 @@ class File[T: (str, bytes)]:
         self._file.close()
 
 # Task group
-class TaskGroup:
+class TaskGroup[T=Any]:
     'Collect tasks for coordinated scheduling, cancellation, and result handling.'
     __slots__ = ('started', 'tasks')
 
     def __init__(self) -> None:
         'Create an empty task group that has not started.'
-        self.tasks: list[Task] = []
+        self.tasks: list[Task[T]] = []
         self.started = False
 
-    def add(self, task: Task, autorun: bool = True) -> Task:
+    def add[T2: Task](self, task: T2, autorun: bool = True) -> T2:
         'Add a task, scheduling it if a started group autoruns additions.'
         if task in self.tasks:
             return task
@@ -279,20 +287,20 @@ class TaskGroup:
 
         return task
 
-    def collect(self, *, background: bool = False) -> TaskGroupCollect[Any]:
+    def collect(self, *, background: bool = False) -> Collect[T]:
         'Create a message that returns results in group order.'
-        return TaskGroupCollect(tuple(self.tasks), background=background)
+        return Collect(*self.tasks, background=background)
 
-    def as_completed(self, *, background: bool = False) -> TaskGroupAsCompleted[Any]:
+    def as_completed(self, *, background: bool = False) -> AsCompleted[T]:
         'Create a message that yields results in completion order.'
-        return TaskGroupAsCompleted(tuple(self.tasks), background=background)
+        return AsCompleted(*self.tasks, background=background)
 
     def cancel(self):
         'Request that every task in the group stop.'
         for task in self.tasks:
             task.stop()
 
-    def run(self, background: bool = False) -> TaskGroupCollect[Any] | None:
+    def run(self, background: bool = False) -> Collect[T] | None:
         'Schedule unfinished tasks and optionally return a collection message.'
         loop = getEventLoop()
         self.started = True
@@ -301,11 +309,11 @@ class TaskGroup:
                 loop.schedule(task)
         return None if background else self.collect()
 
-    def join(self, *, background: bool = False) -> TaskGroupCollect[Any]:
+    def join(self, *, background: bool = False) -> Collect[T]:
         """Wait for all group tasks; use as ``yield group.join()``."""
         return self.collect(background=background)
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[Task[T]]:
         'Iterate over tasks in insertion order.'
         return iter(self.tasks)
 

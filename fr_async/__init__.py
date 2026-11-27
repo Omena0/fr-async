@@ -3,6 +3,7 @@
 from .classes import File, Task, TaskGroup, Yieldable
 from .loop import ExecutionLoop, getEventLoop
 from .scheduler import EEVDFScheduler
+from .utils import server, timeout
 from .messages import *
 from . import messages
 
@@ -14,5 +15,7 @@ __all__ = [
     'TaskGroup',
     'Yieldable',
     'getEventLoop',
-    'messages'
+    'messages',
+    'server',
+    'timeout'
 ]

@@ -78,6 +78,7 @@ class ExecutionLoop:
         self.pending = 0
 
         self.running_tasks: set[Task] = set()
+        self._current_task: Task | None = None
 
         self.timers: list[tuple[float, int, Message | None, Task]] = []
         self._timer_id = itertools.count()
@@ -102,16 +103,25 @@ class ExecutionLoop:
         while self.timers and self.timers[0][0] <= now:
             deadline, _sequence, message, task = heapq.heappop(self.timers)
 
-            if message is None and task._timeout_deadline != deadline:
+            # Message timeout timer (message is not None and not a Sleep)
+            if message is not None and not isinstance(message, Sleep):
+                if message.is_resolved():
+                    continue
+                self.pending -= 1
+                self._cancel_message_wait(message, task)
                 continue
 
-            self.pending -= 1
-
+            # Task-level timeout timer (message is None)
             if message is None:
+                if task._timeout_deadline != deadline:
+                    continue
+                self.pending -= 1
                 task._timeout_deadline = None
                 self._expire_task(task)
                 continue
 
+            # Sleep timer (message is a Sleep)
+            self.pending -= 1
             if task.is_ready:
                 self.schedule(task)
 
@@ -169,6 +179,28 @@ class ExecutionLoop:
             message.resolve([])
 
         task.wait_for.clear()
+
+    def _cancel_message_wait(self, message: Message, task: Task) -> None:
+        'Cancel a specific message wait due to timeout, throwing TaskTimeoutError into the task.'
+        if message in task.wait_for:
+            task.wait_for.remove(message)
+
+        self._remove_timer_wait(message, task)
+        self._remove_socket_wait(message)
+        self._remove_join_wait(message, task)
+
+        remaining = message._pending_count
+        if remaining:
+            if message._reg_type in ('execute', 'as_completed'):
+                key = (message, task)
+                self.abandoned_completions[key] = self.abandoned_completions.get(key, 0) + remaining
+                self._has_timed_out_work = True
+            self.pending -= remaining
+            message._pending_count = 0
+        message.resolve([])
+
+        task.throw_value(TaskTimeoutError(f'message {message!r} exceeded its {message.timeout}s timeout'))
+        self.schedule(task, immediate=True)
 
     def _remove_timer_wait(self, message: Message, task: Task) -> None:
         kept = [entry for entry in self.timers if not (entry[2] is message and entry[3] is task)]
@@ -272,6 +304,7 @@ class ExecutionLoop:
         frame = {"paused": 0.0}
         self._run_frames.append(frame)
         self.running_tasks.add(task)
+        self._current_task = task
 
         start = time.monotonic()
 
@@ -283,6 +316,7 @@ class ExecutionLoop:
             task.result = None
             result = _NOTREADY
         finally:
+            self._current_task = None
             runtime = max(
                 0.0,
                 time.monotonic() - start - frame["paused"],
@@ -421,6 +455,14 @@ class ExecutionLoop:
         task.wait_for.append(message)
         self.pending += message._pending_count
 
+        if message.timeout is not None:
+            deadline = time.monotonic() + message.timeout
+            heapq.heappush(
+                self.timers,
+                (deadline, next(self._timer_id), message, task),
+            )
+            self.pending += 1
+
     def run_task(self, task: Task):
         log(f'\nRunning: {task}')
 
@@ -470,11 +512,10 @@ class ExecutionLoop:
 
             if message._reg_type == 'as_completed':
                 self.pending -= 1
-                message._pending_count -= 1
 
                 message = cast('AsCompleted[Any]', message)
 
-                if message.receive(task, future):
+                if message.receive(future):
                     task.return_value(iter(message))
 
                     if task.is_ready:

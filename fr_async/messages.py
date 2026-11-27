@@ -1,10 +1,12 @@
 from collections.abc import Callable, Generator, Iterable
-from typing import IO, Any, final, overload
+from typing import IO, Any, final, overload, Literal
 from concurrent.futures import Future
 from collections import deque
-import heapq
+from subprocess import Popen
+import subprocess
 import selectors
 import socket
+import heapq
 import time
 
 lazy from .typing import LiteralType, ReturnsAfter, YieldTypeIs
@@ -39,15 +41,16 @@ def register_event(self: MessageWithSocket, task: Task, event: int):
 # Event loop messaging base classes
 class Message:
     """Base class for values yielded to the event loop to request an operation."""
-    __slots__ = ('_pending_count', '_resolved')
+    __slots__ = ('_pending_count', '_resolved', 'timeout')
 
     _type = 'None'
     _reg_type = 'None'
 
-    def __init__(self) -> None:
-        'Initialize the message as unresolved.'
+    def __init__(self, *, timeout: float | None = None) -> None:
+        'Initialize the message as unresolved, with an optional per-message timeout.'
         self._resolved = False
         self._pending_count = 1
+        self.timeout: float | None = timeout
 
     def __repr__(self) -> str:
         'Return a compact representation of the message and its public fields.'
@@ -86,11 +89,11 @@ class Message:
 
 class BackgroundMessage(Message):
     'A message that can run in a detached task when background mode is enabled.'
-    __slots__ = ('background',)
+    __slots__ = ('background', 'timeout')
 
-    def __init__(self, *, background: bool = False):
-        'Initialize the message and set its background mode.'
-        super().__init__()
+    def __init__(self, *, background: bool = False, timeout: float | None = None) -> None:
+        'Initialize the message and set its background mode and optional timeout.'
+        super().__init__(timeout=timeout)
         self.background = background
 
     def task_completed(self, target: Task, waiter: Task) -> None:
@@ -117,9 +120,9 @@ class Sleep[T: float](BackgroundMessage, YieldTypeIs[ReturnsAfter[T, None]]):
 
     _type = 'register'
     _reg_type = 'timer'
-    def __init__(self, duration: LiteralType[T], *, background: bool = False):
-        'Set the sleep deadline and optional background mode.'
-        super().__init__(background=background)
+    def __init__(self, duration: LiteralType[T], *, background: bool = False, timeout: float | None = None):
+        'Set the sleep deadline, optional background mode, and optional per-message timeout.'
+        super().__init__(background=background, timeout=timeout)
         self.until: float = time.monotonic() + duration
 
     def is_resolved(self) -> bool:
@@ -150,9 +153,9 @@ class WaitReadable(MessageWithSocket, YieldTypeIs[ReturnsAfter[None]]):
 
     _type = 'register'
     _reg_type = 'socket'
-    def __init__(self, sock: socket.socket, *, background: bool = False):
+    def __init__(self, sock: socket.socket, *, background: bool = False, timeout: float | None = None):
         'Create a message that waits for socket read readiness.'
-        super().__init__(background=background)
+        super().__init__(background=background, timeout=timeout)
         self.socket = sock
 
     def register(self, task):
@@ -165,9 +168,9 @@ class WaitWritable(MessageWithSocket, YieldTypeIs[ReturnsAfter[None]]):
 
     _type = 'register'
     _reg_type = 'socket'
-    def __init__(self, sock: socket.socket, *, background: bool = False):
+    def __init__(self, sock: socket.socket, *, background: bool = False, timeout: float | None = None):
         'Create a message that waits for socket write readiness.'
-        super().__init__(background=background)
+        super().__init__(background=background, timeout=timeout)
         self.socket = sock
 
     def register(self, task):
@@ -181,9 +184,9 @@ class Accept(MessageWithSocket, YieldTypeIs[ReturnsAfter[None, list[tuple[socket
     _type = 'register'
     _reg_type = 'socket'
 
-    def __init__(self, sock: socket.socket, *, background: bool = False):
+    def __init__(self, sock: socket.socket, *, background: bool = False, timeout: float | None = None):
         """Create an accept message for a listening socket."""
-        super().__init__(background=background)
+        super().__init__(background=background, timeout=timeout)
         self.socket = sock
         self.result: list[tuple[socket.socket, tuple[str, int]]] = []
 
@@ -217,9 +220,9 @@ class ToThread[T, **P](BackgroundMessage, YieldTypeIs[T]):
     @overload
     def __init__(self, func: Callable[..., T], /, *args: Any, background: bool = False, **kwargs: Any) -> None:
         """Typing overload for calls with a background option."""
-    def __init__(self, func: Callable[..., T], /, *args: Any, background: bool = False, **kwargs: Any) -> None:
-        'Store the callable, arguments, and background mode.'
-        super().__init__(background=background)
+    def __init__(self, func: Callable[..., T], /, *args: Any, background: bool = False, timeout: float | None = None, **kwargs: Any) -> None:
+        'Store the callable, arguments, background mode, and optional per-message timeout.'
+        super().__init__(background=background, timeout=timeout)
         self.func: Callable[P, T] = func
         self.args: tuple[Any, ...] = args
         self.kwargs: dict[str, Any] = kwargs
@@ -238,26 +241,31 @@ class ToThread[T, **P](BackgroundMessage, YieldTypeIs[T]):
         )
 
 class AsCompleted[T](BackgroundMessage, YieldTypeIs[ReturnsAfter[None, Generator[T]]]):
-    'Run thread operations and yield results as they complete.'
-    __slots__ = ('completed', 'loop', 'operations')
+    'Run thread operations and/or task groups, yielding results as they complete.'
+    __slots__ = ('completed', 'loop', 'operations', 'targets')
 
     _type = 'register'
     _reg_type = 'as_completed'
 
-    def __init__(self, *operations: ToThread[T, Any], background: bool = False):
-        'Store operations and initialize completion tracking.'
-        super().__init__(background=background)
-        self.operations: tuple[ToThread[T, Any], ...] = operations
+    def __init__(self, *items: ToThread[T, Any] | Task[T], background: bool = False, timeout: float | None = None):
+        'Store thread operations and task targets, initialize completion tracking.'
+        super().__init__(background=background, timeout=timeout)
+        self.operations: tuple[ToThread[T, Any], ...] = tuple(
+            i for i in items if isinstance(i, ToThread)
+        )
+        self.targets: tuple[Task[T], ...] = tuple(
+            i for i in items if isinstance(i, Task)
+        )
         self.completed: deque[tuple[Any, BaseException | None]] = deque()
-        self._pending_count: int = len(operations)
+        self._pending_count = len(self.operations) + sum(not t.done for t in self.targets)
         self.loop: ExecutionLoop | None = None
 
     def register(self, task: Task):
-        'Submit all operations to the thread pool.'
+        'Submit all operations to the thread pool and register all task targets as joiners.'
         _loop: ExecutionLoop = getEventLoop()
         self.loop = _loop
 
-        if not self.operations:
+        if not self.operations and not self.targets:
             task.return_value(iter(self))
             self.resolve([])
             return
@@ -271,26 +279,43 @@ class AsCompleted[T](BackgroundMessage, YieldTypeIs[ReturnsAfter[None, Generator
                     loop.thread_completed(message, task, future)
             )
 
-    def receive(self, task: Task, future: Future[Any]) -> bool:
-        'Record one future result and report whether iteration can begin.'
+        for target in self.targets:
+            if target.done:
+                self.completed.append((target.result, target.exception))
+            else:
+                target._joiners.append((self, task))
+
+        if self.completed or not self._pending_count:
+            task.return_value(iter(self))
+            self.resolve([])
+
+    def receive(self, future: Future[Any]) -> bool:
+        'Record one thread future result and report whether iteration can begin.'
         try:
             self.completed.append((future.result(), None))
         except BaseException as exc:
             self.completed.append((None, exc))
-
+        self._pending_count -= 1
         # The first result makes the message ready.
         if not self.is_resolved():
             self.resolve([])
             return True
-
         return False
+
+    def task_completed(self, target: Task, waiter: Task) -> None:
+        'Record one task completion result from a task joiner.'
+        self.completed.append((target.result, target.exception))
+        self._pending_count -= 1
+        if not self.is_resolved():
+            self.resolve([])
 
     def __iter__(self) -> Generator[Any, Any]:
         'Yield results in completion order, raising any operation error.'
         if self.loop is None:
             raise NoEventLoopException("No event loop started.")
 
-        for _ in self.operations:
+        remaining = len(self.operations) + len(self.targets)
+        while remaining:
             with self.loop.pause_accounting():
                 while not self.completed:
                     if self.loop.scheduler:
@@ -298,6 +323,7 @@ class AsCompleted[T](BackgroundMessage, YieldTypeIs[ReturnsAfter[None, Generator
                     else:
                         self.loop.poll()
 
+            remaining -= 1
             result, exception = self.completed.popleft()
 
             if exception is not None:
@@ -311,9 +337,9 @@ class TaskJoin[T](BackgroundMessage, YieldTypeIs[ReturnsAfter[None, T]]):
 
     _type = 'register'
 
-    def __init__(self, target: Task[T], *, background: bool = False):
+    def __init__(self, target: Task[T], *, background: bool = False, timeout: float | None = None):
         'Create a message that waits for the target task.'
-        super().__init__(background=background)
+        super().__init__(background=background, timeout=timeout)
         self.target = target
 
     def register(self, task: Task):
@@ -328,83 +354,71 @@ class TaskJoin[T](BackgroundMessage, YieldTypeIs[ReturnsAfter[None, T]]):
         else:
             self.target._joiners.append((self, task))
 
-class TaskGroupCollect[T](BackgroundMessage, YieldTypeIs[ReturnsAfter[None, list[T]]]):
-    'Wait for all target tasks and return results in target order.'
-    __slots__ = ('indices', 'results', 'targets')
+class Collect[T=Any](BackgroundMessage, YieldTypeIs[list[T] | Generator[T]]):
+    'Wait for multiple tasks/messages and return results, ordered or by completion.'
+    __slots__ = ('_pending_count', 'completed', 'indices', 'items', 'loop', 'mode', 'results')
 
     _type = 'register'
 
-    def __init__(self, targets: tuple[Task, ...], *, background: bool = False):
-        'Initialize ordered result storage and pending task tracking.'
-        super().__init__(background=background)
-        self.targets = targets
-        self.results: list[Any] = [None] * len(targets)
-        self.indices = {target: index for index, target in enumerate(targets)}
-        self._pending_count = sum(not target.done for target in targets)
+    def __init__(self, *items: Task[T] | Message, mode: Literal['ordered', 'completed'] = 'ordered', background: bool = False, timeout: float | None = None):
+        'Initialize ordered or completion-ordered result collection for any mix of tasks and messages.'
+        super().__init__(background=background, timeout=timeout)
+        self.items: tuple[Task[T] | Message, ...] = items
+        self.mode = mode
+        self.results: list[T | None | BaseException] = [None] * len(items)
+        self.indices = {id(item): index for index, item in enumerate(items)}
+        self.completed: deque[tuple[Any, BaseException | None]] = deque()
+        self.loop: ExecutionLoop | None = None
+        self._pending_count = sum(
+            0 if isinstance(item, Task) and item.done else
+            0 if isinstance(item, Message) and item.is_resolved() else
+            1
+            for item in items
+        )
 
-    def register(self, task: Task):
-        'Collect existing results and register for unfinished tasks.'
-        for index, target in enumerate(self.targets):
-            if target.done:
-                self.results[index] = target.result
-                if target.exception is not None:
-                    task.throw_value(target.exception)
+    def register(self, task: Task[T]):
+        'Register all items; existing results are captured immediately, pending ones await resolution.'
+        self.loop = getEventLoop()
+
+        for index, item in enumerate(self.items):
+            if isinstance(item, Task):
+                if item.done:
+                    self.results[index] = item.exception if item.exception is not None else item.result
+                else:
+                    item._joiners.append((self, task))
+            # item is a Message
+            elif item.is_resolved():
+                self.results[index] = None  # messages don't carry a result directly
             else:
-                target._joiners.append((self, task))
+                item.register(task)
+
         if not self._pending_count:
-            task.return_value(self.results)
+            if self.mode == 'completed':
+                task.return_value(iter(self))
+            else:
+                task.return_value(self.results)
             self.resolve([])
 
-    def task_completed(self, target: Task, waiter: Task):
-        'Store a result and wake the waiter when all targets finish.'
-        self.results[self.indices[target]] = target.result
-        if target.exception is not None:
-            waiter.throw_value(target.exception)
+    def task_completed(self, target: Task[T], waiter: Task) -> None:
+        'Store a completed task result and wake the waiter when all items finish.'
+        index = self.indices.get(id(target))
+        if index is not None:
+            self.results[index] = target.exception if target.exception is not None else target.result
         self._pending_count -= 1
-        if not self._pending_count:
+        if self.mode == 'completed':
+            self.completed.append((target.result, target.exception))
+            if not self.is_resolved():
+                self.resolve([])
+                waiter.return_value(iter(self))
+        elif not self._pending_count:
             self.resolve([])
             waiter.return_value(self.results)
 
-class TaskGroupAsCompleted[T](BackgroundMessage, YieldTypeIs[ReturnsAfter[None, Generator[T]]]):
-    'Wait for target tasks and expose results in completion order.'
-    __slots__ = ('completed', 'loop', 'targets')
-
-    _type = 'register'
-    _reg_type = 'as_completed'
-
-    def __init__(self, targets: tuple[Task, ...], *, background: bool = False):
-        'Initialize completion tracking for target tasks.'
-        super().__init__(background=background)
-        self.targets = targets
-        self.completed: deque[tuple[Any, BaseException | None]] = deque()
-        self._pending_count = sum(not target.done for target in targets)
-        self.loop: ExecutionLoop | None = None
-
-    def register(self, task: Task):
-        'Register for unfinished targets and queue existing results.'
-        self.loop = getEventLoop()
-        for target in self.targets:
-            if target.done:
-                self.completed.append((target.result, target.exception))
-            else:
-                target._joiners.append((self, task))
-        if self.completed or not self._pending_count:
-            task.return_value(iter(self))
-            self.resolve([])
-
-    def task_completed(self, target: Task, waiter: Task):
-        'Queue a result and wake the waiter on the first completion.'
-        self.completed.append((target.result, target.exception))
-        self._pending_count -= 1
-        if not self.is_resolved():
-            self.resolve([])
-            waiter.return_value(iter(self))
-
     def __iter__(self) -> Generator[T]:
-        'Yield results in completion order while driving the event loop.'
+        'Yield results in completion order (mode="completed") while driving the event loop.'
         if self.loop is None:
             raise NoEventLoopException('No event loop started.')
-        remaining = len(self.targets)
+        remaining = len(self.items)
         while remaining:
             with self.loop.pause_accounting():
                 while not self.completed:
@@ -418,6 +432,28 @@ class TaskGroupAsCompleted[T](BackgroundMessage, YieldTypeIs[ReturnsAfter[None, 
                 raise exception
             yield result
 
+class Exec(BackgroundMessage, YieldTypeIs[Popen[bytes]]):
+    'Run a subprocess in the event loop thread pool, returning a Popen object.'
+    __slots__ = ('args', 'path', 'proc')
+
+    _type = 'execute'
+
+    def __init__(self, path: str, *args: str, background: bool = False, timeout: float | None = None):
+        'Store the command and arguments, optional background mode and per-message timeout.'
+        super().__init__(background=background, timeout=timeout)
+        self.path = path
+        self.args = args
+        self.proc: subprocess.Popen[bytes] | None = None
+
+    def execute(self) -> subprocess.Popen[bytes]:
+        'Launch the subprocess (blocking, runs in the thread pool).'
+        self.proc = subprocess.Popen(
+            [self.path, *self.args],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        return self.proc
+
 # File IO
 def _validateFileMode[T: (str, bytes)](self: FileWrite[T]) -> bool:
     'Return whether the file mode matches the data type.'
@@ -428,9 +464,9 @@ class FileRead[T: (str, bytes)](BackgroundMessage, YieldTypeIs[T]):
     __slots__ = ('file', 'n')
 
     _type = 'execute'
-    def __init__(self, file: IO[T], n: int = -1, *, background: bool = False):
-        'Store the file, read size, and background mode.'
-        super().__init__(background=background)
+    def __init__(self, file: IO[T], n: int = -1, *, background: bool = False, timeout: float | None = None):
+        'Store the file, read size, background mode, and optional per-message timeout.'
+        super().__init__(background=background, timeout=timeout)
         self.file: IO[T] = file
         self.n: int = n
 
@@ -443,9 +479,9 @@ class FileWrite[T: (str, bytes)](BackgroundMessage, YieldTypeIs[int]):
     __slots__ = ('data', 'file')
 
     _type = 'execute'
-    def __init__(self, file: IO[T], data: T, *, background: bool = False):
-        'Store the file and data, validating text or binary mode.'
-        super().__init__(background=background)
+    def __init__(self, file: IO[T], data: T, *, background: bool = False, timeout: float | None = None):
+        'Store the file and data, validating text or binary mode, and optional per-message timeout.'
+        super().__init__(background=background, timeout=timeout)
         self.file: IO[T] = file
         self.data = data
 
@@ -461,14 +497,14 @@ __all__ = [
     'Accept',
     'AsCompleted',
     'BackgroundMessage',
+    'Collect',
+    'Exec',
     'FileRead',
     'FileWrite',
     'Message',
     'MessageWithSocket',
     'Messages',
     'Sleep',
-    'TaskGroupAsCompleted',
-    'TaskGroupCollect',
     'TaskJoin',
     'ToThread',
     'WaitReadable',
