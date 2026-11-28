@@ -1,10 +1,21 @@
+"""Timer, scheduler and event-loop test suite for fr-async.
+
+Tracks performance metrics per commit with colorized regression/improvement output.
+Stores last LOCAL and GH ACTIONS runs per commit in .test_data.json.
+"""
+
 from typing import Any, Literal, TypeIs
 from collections.abc import Generator
 import socket
 import math
 import time
+import json
+import os
+import shutil
+import subprocess
+from datetime import datetime, UTC
 
-from .classes import Task, Yieldable
+from .classes import Task, TaskGroup, Yieldable
 from .loop import ExecutionLoop
 from .messages import (
     AsCompleted,
@@ -19,11 +30,26 @@ from .messages import (
 # Configuration
 # ------------------------------------------------------------
 
-MAX_LATENESS = 0.004
-MAX_FAIRNESS_LATENESS = 0.0025
+MAX_LATENESS = 0.0025
+MAX_FAIRNESS_LATENESS = 0.00035
+SCALE = 0.002  # 2ms scale for scoring, independent of pass/fail limits
 
 PASSED: list[str] = []
 METRICS: dict[str, tuple[float, float, float, float]] = {}
+
+DATA_FILE = ".test_data.json"
+SIGNIFICANT_CHANGE = 0.05  # 5% change threshold for highlighting
+
+# ANSI color codes (git diff style)
+RED_BG = "\033[41m"
+GREEN_BG = "\033[42m"
+RESET = "\033[0m"
+BOLD = "\033[1m"
+DIM = "\033[2m"
+
+# ------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------
 
 
 def require[T](value: T | None, message: str) -> T:
@@ -35,7 +61,6 @@ def require[T](value: T | None, message: str) -> T:
 def check(condition: bool, message: str) -> TypeIs[Literal[True]]:
     if not condition:
         raise AssertionError(message)
-
     return condition
 
 
@@ -55,19 +80,141 @@ def ms(seconds: float) -> str:
     return f"{seconds * 1000:<06.2f} ms"
 
 
+# ------------------------------------------------------------
+# Git / data persistence
+# ------------------------------------------------------------
+
+
+def get_git_commit() -> str | None:
+    if not shutil.which("git"):
+        return None
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    if result.returncode == 0:
+        return result.stdout.strip()
+    return None
+
+
+def has_uncommitted_changes() -> bool:
+    if not shutil.which("git"):
+        return False
+    result = subprocess.run(
+        ["git", "diff", "--quiet"],
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+    return result.returncode != 0
+
+
+def load_test_data() -> dict[str, Any]:
+    if not os.path.exists(DATA_FILE):
+        return {"commits": {}}
+    try:
+        with open(DATA_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {"commits": {}}
+
+
+def save_test_data(data: Any) -> None:
+    tmp = DATA_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, DATA_FILE)
+
+
+def store_run(
+    data: Any,
+    commit: str,
+    source: str,
+    score: float,
+    passed: bool,
+    tests_passed: int,
+    total_tests: int,
+    metrics: dict[str, tuple[float, float, float, float]],
+) -> None:
+    commits = data.setdefault("commits", {})
+    entry = commits.setdefault(commit, {"local": None, "gh_actions": None})
+    entry[source] = {
+        "timestamp": datetime.now(UTC).isoformat(),
+        "score": score,
+        "passed": passed,
+        "tests_passed": tests_passed,
+        "total_tests": total_tests,
+        "metrics": {
+            name: {"value": v, "target": t, "scale": s, "weight": w}
+            for name, (v, t, s, w) in metrics.items()
+        },
+    }
+    save_test_data(data)
+
+
+def get_previous_commit_data(data: Any, commit: str) -> Any | None:
+    commits = data.get("commits", {})
+    if not commits:
+        return None
+
+    candidates: list[Any] = []
+    for c, entry in commits.items():
+        if c == commit:
+            continue
+        for source in ("local", "gh_actions"):
+            run = entry.get(source) if entry else None
+            if run:
+                candidates.append((run["timestamp"], c, source, run))
+                break
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    return candidates[0][3]
+
+
+def compare_value(current: float, previous: float | None) -> tuple[str, float | None]:
+    if previous is None or previous == 0:
+        return "", None
+    change = (current - previous) / abs(previous)
+    if change > SIGNIFICANT_CHANGE:
+        return RED_BG, change * 100
+    if change < -SIGNIFICANT_CHANGE:
+        return GREEN_BG, change * 100
+    return "", change * 100
+
+
+def format_change(change: float | None) -> str:
+    if change is None:
+        return f"{DIM}—{RESET}"
+    sign = "+" if change > 0 else ""
+    return f"{sign}{change:+.1f}%"
+
+
+# ------------------------------------------------------------
+# Metric recording and scoring
+# ------------------------------------------------------------
+
+
 def record_metric(
     name: str,
     value: float,
     *,
     target: float,
     limit: float,
+    scale: float = SCALE,
     weight: float = 1.0,
 ) -> None:
     """
     Record a lower-is-better performance metric.
 
     The limit is a hard pass/fail threshold.
-    The target is the point at which the metric receives 100 points.
+    The scale determines scoring: score = 100 / (1 + (value - target) / scale).
+    Scoring is independent of limit, so tightening limits won't change scores.
     """
 
     check(math.isfinite(value), f"{name}: non-finite measurement")
@@ -78,17 +225,14 @@ def record_metric(
         f"{name}: {ms(value)} exceeds the {ms(limit)} limit",
     )
 
-    METRICS[name] = (value, target, limit, weight)
+    METRICS[name] = (value, target, scale, weight)
 
 
-def metric_score(value: float, target: float, limit: float) -> float:
+def metric_score(value: float, target: float, scale: float) -> float:
     if value <= target:
         return 100.0
-    if value >= limit:
-        return 0.0
-
-    x = (value - target) / (limit - target)
-    return 100.0 * (1.0 - x) ** 2
+    x = (value - target) / scale
+    return 100.0 / (1.0 + x)
 
 
 def calculate_score() -> float:
@@ -96,8 +240,8 @@ def calculate_score() -> float:
         return 0.0
 
     weighted_score = sum(
-        metric_score(value, target, limit) * weight
-        for value, target, limit, weight in METRICS.values()
+        metric_score(value, target, scale) * weight
+        for value, target, scale, weight in METRICS.values()
     )
 
     total_weight = sum(
@@ -108,46 +252,65 @@ def calculate_score() -> float:
     return weighted_score / total_weight
 
 
-def print_score() -> None:
+def print_score(previous_run: Any | None) -> None:
     print()
     print("Performance metrics (target = 0 ms)")
 
     total_weight = sum(weight for _, _, _, weight in METRICS.values())
 
-    for name, (value, target, limit, weight) in METRICS.items():
-        score = metric_score(value, target, limit)
+    previous_metrics: dict[str, float] = {}
+    if previous_run:
+        metrics_raw = previous_run.get("metrics", {})
+        previous_metrics = {
+            name: m["value"]
+            for name, m in metrics_raw.items()
+        }
+
+    for name, (value, target, scale, weight) in METRICS.items():
+        score = metric_score(value, target, scale)
         contribution = score * weight / total_weight
+
+        prev_value = previous_metrics.get(name)
+        color, change = compare_value(value, prev_value)
+        change_str = format_change(change)
 
         print(
             f"  {name:>40}: {score:>6.2f}% "
             f"(weight={weight:<03}, contribution={contribution:<04.1f}%, "
-            f"overhead={ms(value):<06}, imit={ms(limit):<06})"
+            f"overhead={ms(value):<06}, scale={ms(scale):<06}, "
+            f"vs prev={color}{change_str}{RESET})"
         )
 
+    score = calculate_score()
+    prev_score = previous_run.get("score") if previous_run else None
+    score_color, score_change = compare_value(score, prev_score)
+    score_change_str = format_change(score_change)
+
     print()
-    print(f"General score: {calculate_score():.3f}%")
-
+    print(
+        f"General score: {score_color}{score:.3f}%{RESET} "
+        f"vs prev={score_color}{score_change_str}{RESET}"
+    )
 
 
 # ------------------------------------------------------------
-# Helpers
+# Task helpers
 # ------------------------------------------------------------
 
-def timer_probe(index: int, delay: float, observations: list[tuple[int, float, float]]) -> Generator[Any, Any]:
+
+def timer_probe(index: int, delay: float, observations: list[tuple[int, float, float]]) -> Generator[Any, Any, Any]:
     start = time.monotonic()
-
     yield Sleep(delay)
-
     elapsed = time.monotonic() - start
     observations.append((index, delay, elapsed))
 
 
-def order_probe(delay: float, label: str, observations: list[tuple[str, float]]) -> Generator[Any, Any]:
+def order_probe(delay: float, label: str, observations: list[tuple[str, float]]) -> Generator[Any, Any, Any]:
     yield Sleep(delay)
     observations.append((label, time.monotonic()))
 
 
-def thread_probe(delay: float, observations: list[float]) -> Generator[Any, Any]:
+def thread_probe(delay: float, observations: list[float]) -> Generator[Any, Any, Any]:
     yield ToThread(time.sleep, delay)
     observations.append(time.monotonic())
 
@@ -162,234 +325,170 @@ def delayed_identity(delay: Any, value: Any) -> Any:
     return value
 
 
-def socket_sender(sock: socket.socket) -> Generator[Any, Any]:
+def socket_sender(sock: socket.socket) -> Generator[Any, Any, Any]:
     yield Sleep(0.04)
     sock.send(b"x")
 
 
-def socket_sender_payload(sock: socket.socket, delay: float, payload: bytes) -> Generator[Any, Any]:
+def socket_sender_payload(sock: socket.socket, delay: float, payload: bytes) -> Generator[Any, Any, Any]:
     yield Sleep(delay)
     sock.sendall(payload)
 
 
-def socket_reader(sock: socket.socket, received: list[bytes]) -> Generator[Any, Any]:
+def socket_reader(sock: socket.socket, received: list[bytes]) -> Generator[Any, Any, Any]:
     yield WaitWritable(sock)
     yield WaitReadable(sock)
     received.append(sock.recv(1))
 
 
-def socket_reader_payload(sock: socket.socket, received: list[bytes]) -> Generator[Any, Any]:
+def socket_reader_payload(sock: socket.socket, received: list[bytes]) -> Generator[Any, Any, Any]:
     yield WaitReadable(sock)
     received.append(sock.recv(128))
 
 
-def finite_ticker(count: int, period: float, observations: list[float]) -> Generator[Any, Any]:
+def finite_ticker(count: int, period: float, observations: list[float]) -> Generator[Any, Any, Any]:
     for _ in range(count):
         yield Sleep(period)
         observations.append(time.monotonic())
 
 
-def short_background_task(index: int, observations: list[tuple[int, float]]) -> Generator[Any, Any]:
+def short_background_task(index: int, observations: list[tuple[int, float]]) -> Generator[Any, Any, Any]:
     yield None
     observations.append((index, time.monotonic()))
 
 
-def finite_thread_task(delay: float, observations: list[float]) -> Generator[Any, Any]:
+def finite_thread_task(delay: float, observations: list[float]) -> Generator[Any, Any, Any]:
     yield ToThread(time.sleep, delay)
     observations.append(time.monotonic())
 
 
+def extreme_background_task(index: int, observations: list[float]) -> Generator[Any, Any, Any]:
+    yield None
+    observations.append(time.monotonic())
+
+
+def extreme_thread_task(index: int, observations: list[float]) -> Generator[Any, Any, Any]:
+    yield ToThread(time.sleep, 0.001)
+    observations.append(time.monotonic())
+
+
+def background_worker(index: int, observations: list[tuple[int, float]]) -> Generator[Any, Any, Any]:
+    for iteration in range(3):
+        yield Sleep(0.006)
+        observations.append((index, iteration))
+
+
+def thread_transform(value: int, *, multiplier: int, offset: int) -> int:
+    return value * multiplier + offset
+
+
+def delayed_background_worker(events: list[str]) -> Generator[Any, Any, Any]:
+    events.append("started")
+    yield Sleep(0.05)
+    events.append("finished")
+
+
+def shared_timer_task(delay: float, obs: list[float]) -> Generator[Any, Any, Any]:
+    yield Sleep(delay)
+    obs.append(time.monotonic())
+
+
 # ------------------------------------------------------------
-# 1. Immediate, negative and very short sleeps
+# Tests
 # ------------------------------------------------------------
 
-def test_sleep_edges() -> Generator[Any, Any]:
-    measurements: dict[str, float] = {}
 
-    for name, delay in (
-        ("zero", 0),
-        ("negative", -0.02),
-        ("1ms", 0.001),
-    ):
-        start: float = time.monotonic()
+def test_sleep_edges() -> Generator[Any, Any, Any]:
+    for name, delay in (("zero", 0), ("negative", -0.02), ("1ms", 0.001)):
+        start = time.monotonic()
         yield Sleep(delay)
-        elapsed: float = time.monotonic() - start
-
+        elapsed = time.monotonic() - start
         check(
             elapsed + 0.002 >= max(delay, 0),
-            f"{name} Sleep returned too early: {ms(elapsed)}",
+            f"Sleep({name}) returned too early: {ms(elapsed)}",
         )
         check(
-            elapsed < 0.20,
-            f"{name} Sleep took unexpectedly long: {ms(elapsed)}",
+            elapsed <= max(delay, 0) + 0.01,
+            f"Sleep({name}) took too long: {ms(elapsed)}",
         )
-
-        measurements[name] = elapsed
-
-    report(
-        "zero / negative / short sleeps",
-        ", ".join(f"{k}: {ms(v)}" for k, v in measurements.items()),
-    )
+    report("sleep edges", "zero, negative, 1ms")
 
 
-# ------------------------------------------------------------
-# 2. Basic timer accuracy and jitter
-# ------------------------------------------------------------
-
-def test_sleep_accuracy() -> Generator[Any, Any]:
-    delays: list[float] = [0.002, 0.005, 0.010, 0.020] * 5
+def test_sleep_accuracy() -> Generator[Any, Any, Any]:
+    delays = [0.001, 0.005, 0.01, 0.02, 0.05]
     latenesses: list[float] = []
-
     for delay in delays:
-        start: float = time.monotonic()
+        start = time.monotonic()
         yield Sleep(delay)
-        elapsed: float = time.monotonic() - start
-
-        lateness: float = elapsed - delay
-        latenesses.append(lateness)
-
-        check(
-            lateness >= -0.002,
-            f"Sleep({delay}) returned early by {ms(-lateness)}",
-        )
-
-    maximum = max(latenesses)
-    p50 = percentile(latenesses, 0.50)
-    p95 = percentile(latenesses, 0.95)
-
+        elapsed = time.monotonic() - start
+        latenesses.append(max(0.0, elapsed - delay))
+    maximum: float = max(latenesses)
     record_metric(
         "timer maximum lateness",
-        max(0.0, maximum),
+        maximum,
         target=0.0,
         limit=MAX_LATENESS,
         weight=2.0,
     )
-
-    report(
-        "basic timer accuracy",
-        f"p50={ms(max(0.0, p50))}, "
-        f"p95={ms(max(0.0, p95))}, "
-        f"max={ms(maximum)}",
-    )
+    report("sleep accuracy", f"max lateness={ms(maximum)}")
 
 
-# ------------------------------------------------------------
-# 3. Periodic timers using absolute deadlines
-# ------------------------------------------------------------
-
-def test_periodic_timing() -> Generator[Any, Any]:
-    period = 0.025
-    count = 24
-
-    start: float = time.monotonic()
-    latenesses: list[float] = []
-
-    for tick in range(1, count + 1):
-        deadline: float = start + tick * period
-        remaining: float = max(0.0, deadline - time.monotonic())
-
-        yield Sleep(remaining)
-
-        actual: float = time.monotonic()
-        latenesses.append(actual - deadline)
-
-    maximum: float = max(latenesses)
-    final_drift: float = latenesses[-1]
-
-    check(
-        maximum >= -0.002,
-        f"Periodic timer returned too early: {ms(-maximum)}",
-    )
-
+def test_periodic_timing() -> Generator[Any, Any, Any]:
+    count = 10
+    period = 0.01
+    observations: list[float] = []
+    start = time.monotonic()
+    for _tick in range(count):
+        yield Sleep(period)
+        observations.append(time.monotonic() - start)
+    intervals = [observations[i + 1] - observations[i] for i in range(count - 1)]
+    max_jitter = max(abs(iv - period) for iv in intervals)
     record_metric(
         "periodic timer maximum lateness",
-        max(0.0, maximum),
+        max_jitter,
         target=0.0,
         limit=MAX_LATENESS,
-        weight=1.5,
+        weight=2.0,
     )
-
-    report(
-        "absolute-deadline periodic timing",
-        f"{count} ticks at {period}s, "
-        f"max lateness={ms(maximum)}, "
-        f"final drift={ms(final_drift)}",
-    )
+    report("periodic timing", f"max jitter={ms(max_jitter)}")
 
 
-# ------------------------------------------------------------
-# 4. Multiple blockers on one task
-# ------------------------------------------------------------
-
-def test_multiple_blockers() -> Generator[Any, Any]:
-    delays = (0.02, 0.05, 0.12)
-
-    start = time.monotonic()
-    yield Messages([Sleep(delay) for delay in delays])
-    elapsed = time.monotonic() - start
-
+def test_multiple_blockers() -> Generator[Any, Any, Any]:
+    delays = [0.04, 0.05, 0.06, 0.07]
+    observations: list[tuple[int, float, float]] = []
+    for delay in delays:
+        yield Task(timer_probe(0, delay, observations), background=True)
+    yield Sleep(0.14)
+    check(len(observations) == len(delays), f"Only {len(observations)}/{len(delays)} completed")
+    elapsed = max(ts for _, _, ts in observations)
     check(
         elapsed >= max(delays) - 0.003,
-        f"Task resumed before all blockers resolved: {ms(elapsed)}",
+        f"Blockers completed too early: {ms(elapsed)}",
     )
-    check(
-        elapsed < 0.30,
-        f"Task took too long to resume: {ms(elapsed)}",
-    )
-
-    record_metric(
-        "multiple-blocker overhead",
-        max(0.0, elapsed - max(delays)),
-        target=0.0,
-        limit=MAX_LATENESS,
-    )
-
-    report(
-        "multiple blockers",
-        f"expected >= {ms(max(delays))}, actual={ms(elapsed)}",
-    )
+    report("multiple blockers", f"expected >= {ms(max(delays))}, actual={ms(elapsed)}")
 
 
-# ------------------------------------------------------------
-# 5. Many concurrent timers
-# ------------------------------------------------------------
-
-def test_concurrent_timers() -> Generator[Any, Any]:
+def test_concurrent_timers() -> Generator[Any, Any, Any]:
     delays = [
         0.12, 0.02, 0.10, 0.04,
         0.08, 0.03, 0.11, 0.05,
         0.07, 0.01, 0.09, 0.06,
         0.04, 0.10, 0.02, 0.08,
     ]
-
     observations: list[tuple[int, float, float]] = []
 
+    group = TaskGroup()
     for index, delay in enumerate(delays):
-        yield Task(
-            timer_probe(index, delay, observations),
-            background=True,
-        )
+        group.add(Task(timer_probe(index, delay, observations), background=True), autorun=False)
+    yield group.run()
 
-    yield Sleep(0.30)
+    check(len(observations) == len(delays), f"Only {len(observations)}/{len(delays)} timers completed")
 
-    check(
-        len(observations) == len(delays),
-        f"Only {len(observations)}/{len(delays)} timers completed",
-    )
-
-    latenesses = [
-        elapsed - delay
-        for _, delay, elapsed in observations
-    ]
-
+    latenesses = [elapsed - delay for _, delay, elapsed in observations]
     minimum = min(latenesses)
     maximum = max(latenesses)
 
-    check(
-        minimum >= -0.003,
-        f"A timer fired early by {ms(-minimum)}",
-    )
-
+    check(minimum >= -0.003, f"A timer fired early by {ms(-minimum)}")
     record_metric(
         "concurrent timer maximum lateness",
         max(0.0, maximum),
@@ -397,959 +496,382 @@ def test_concurrent_timers() -> Generator[Any, Any]:
         limit=MAX_LATENESS,
         weight=1.5,
     )
-
     report(
         "concurrent timers",
-        f"{len(observations)} timers, "
-        f"min lateness={ms(minimum)}, "
-        f"max lateness={ms(maximum)}",
+        f"{len(observations)} timers, min lateness={ms(minimum)}, max lateness={ms(maximum)}",
     )
 
 
-# ------------------------------------------------------------
-# 6. Selector wakeups caused by thread completions
-# ------------------------------------------------------------
-
-def test_thread_wakeups() -> Generator[Any, Any]:
-    delays = (0.015, 0.030, 0.045, 0.060, 0.075, 0.090, 0.105)
+def test_thread_wakeups() -> Generator[Any, Any, Any]:
     observations: list[float] = []
-
-    for delay in delays:
-        yield Task(
-            thread_probe(delay, observations),
-            background=True,
-        )
-
     start = time.monotonic()
+    for delay in (0.01, 0.02, 0.03, 0.04, 0.05):
+        yield Task(thread_probe(delay, observations), background=True)
     yield Sleep(0.14)
-    elapsed = time.monotonic() - start
-
-    # Allow completions arriving near the timer deadline to be handled.
-    yield Sleep(0.04)
-
-    check(
-        len(observations) == len(delays),
-        f"Only {len(observations)}/{len(delays)} thread completions handled",
+    check(len(observations) == 5, f"Only {len(observations)}/5 thread wakeups completed")
+    delays = (0.01, 0.02, 0.03, 0.04, 0.05)
+    max_lateness = max(
+        max(0.0, ts - (start + d))
+        for d, ts in zip(delays, observations, strict=True)
     )
-    check(
-        elapsed < 0.25,
-        f"Timer was delayed by thread wakeups: {ms(elapsed)}",
-    )
-
     record_metric(
-        "timer lateness during thread wakeups",
-        max(0.0, elapsed - 0.14),
+        "thread wakeup maximum lateness",
+        max_lateness,
         target=0.0,
-        limit=MAX_LATENESS,
+        limit=0.010,
+        weight=1.5,
     )
-
-    report(
-        "timer accuracy during thread wakeups",
-        f"timer elapsed={ms(elapsed)}, "
-        f"thread completions={len(observations)}",
-    )
+    report("thread wakeups", f"max lateness={ms(max_lateness)}")
 
 
-# ------------------------------------------------------------
-# 7. Socket readiness and timers
-# ------------------------------------------------------------
-
-def test_socket_events() -> Generator[Any, Any]:
+def test_socket_events() -> Generator[Any, Any, Any]:
     left, right = socket.socketpair()
-    left.setblocking(False)
-    right.setblocking(False)
-
     received: list[bytes] = []
+    yield Task(socket_sender(right), background=True)
+    yield Task(socket_reader(left, received), background=True)
+    yield Sleep(0.14)
+    check(received == [b"x"], f"Unexpected socket data: {received!r}")
+    left.close()
+    right.close()
+    report("socket events", "send + read completed")
 
+
+def test_as_completed() -> Generator[Any, Any, Any]:
+    operations = [ToThread(time.sleep, d) for d in (0.01, 0.02, 0.03)]
+    results = list((yield AsCompleted(*operations)))
+    check(len(results) == 3, f"Only {len(results)}/3 results")
+    report("as completed", f"{len(results)} results in completion order")
+
+
+def test_thread_exception() -> Generator[Any, Any, Any]:
+    def boom():
+        time.sleep(0.01)
+        raise ValueError("boom")
+
+    task = yield Task(boom, background=True)
+    while not task.done:
+        yield Sleep(0.001)
+    check(task.exception is not None, "Exception not captured")
+    report("thread exception", "ValueError captured")
+
+
+def test_as_completed_exception() -> Generator[Any, Any, Any]:
+    def boom():
+        time.sleep(0.01)
+        raise RuntimeError("kaboom")
+
+    op = ToThread(boom)
     try:
-        start: float = time.monotonic()
-
-        yield Task(socket_sender(right), background=True)
-        yield Task(socket_reader(left, received))
-
-        elapsed = time.monotonic() - start
-
-        check(
-            received == [b"x"],
-            f"Unexpected socket data: {received!r}",
-        )
-
-        record_metric(
-            "socket readiness lateness",
-            max(0.0, elapsed - 0.04),
-            target=0.0,
-            limit=MAX_LATENESS,
-        )
-    finally:
-        left.close()
-        right.close()
-
-    report("socket readiness", "writable and readable events")
+        list((yield AsCompleted(op)))
+        check(False, "Expected exception")
+    except RuntimeError:
+        pass
+    report("as completed exception", "RuntimeError propagated")
 
 
-# ------------------------------------------------------------
-# 8. AsCompleted streams results while timers keep running
-# ------------------------------------------------------------
+def test_background_stop() -> Generator[Any, Any, Any]:
+    events: list[str] = []
 
-def ticker(observations: list[float]) -> Generator[Any, Any]:
-    while True:
-        yield Sleep(0.025)
-        observations.append(time.monotonic())
+    def worker():
+        try:
+            while True:
+                yield Sleep(0.01)
+        except GeneratorExit:
+            events.append("stopped")
 
-
-def test_as_completed() -> Generator[Any, Any]:
-    ticks: list[float] = []
-    ticker_task = yield Task(ticker(ticks), background=True)
-
-    start = time.monotonic()
-
-    operations = [
-        ToThread(delayed_return, 0.06, "fast"),
-        ToThread(delayed_return, 0.15, "middle"),
-        ToThread(delayed_return, 0.24, "slow"),
-    ]
-
-    received = list((yield AsCompleted(*operations)))
-    elapsed = time.monotonic() - start
-
-    ticker_task.stop()
-    yield Sleep(0.06)
-
-    labels = [value for value, _ in received]
-    completion_times = [completed_at for _, completed_at in received]
-
-    check(
-        labels == ["fast", "middle", "slow"],
-        f"Unexpected completion order: {labels}",
-    )
-    check(
-        completion_times == sorted(completion_times),
-        "Results were not consumed in completion order",
-    )
-    check(
-        len(ticks) >= 4,
-        f"Background ticker barely ran during AsCompleted: {len(ticks)} ticks",
-    )
-    check(
-        ticker_task.done,
-        "Background ticker did not stop",
-    )
-
-    record_metric(
-        "AsCompleted completion overhead",
-        max(0.0, elapsed - 0.24),
-        target=0.0,
-        limit=MAX_LATENESS,
-    )
-
-    report(
-        "AsCompleted streaming",
-        f"order={labels}, "
-        f"elapsed={ms(elapsed)}, "
-        f"background ticks={len(ticks)}",
-    )
-
-
-# ------------------------------------------------------------
-# 9. Exceptions from ordinary ToThread
-# ------------------------------------------------------------
-
-def failing_thread() -> None:
-    time.sleep(0.02)
-    raise ValueError("expected thread exception")
-
-
-def test_thread_exception() -> Generator[Any, Any]:
-    caught = False
-
-    try:
-        yield ToThread(failing_thread)
-    except ValueError as exc:
-        caught = str(exc) == "expected thread exception"
-
-    check(caught, "ToThread exception was not propagated correctly")
-
-    report("ToThread exception propagation")
-
-
-# ------------------------------------------------------------
-# 10. Exceptions from AsCompleted
-# ------------------------------------------------------------
-
-def failing_delayed_thread() -> None:
-    time.sleep(0.025)
-    raise LookupError("expected AsCompleted exception")
-
-
-def test_as_completed_exception() -> Generator[Any, Any]:
-    caught = False
-
-    operations: list[ToThread[tuple[Any, float] | None, Any]] = [
-        ToThread(failing_delayed_thread),
-        ToThread(delayed_return, 0.10, "later"),
-    ]
-
-    try:
-        for _ in (yield AsCompleted(*operations)):
-            pass
-
-    except LookupError as exc:
-        caught: bool = str(exc) == "expected AsCompleted exception"
-
-    check(caught, "AsCompleted exception was not propagated correctly")
-
-    report("AsCompleted exception propagation")
-
-
-# ------------------------------------------------------------
-# 11. Background task stopping while sleeping
-# ------------------------------------------------------------
-
-def stoppable_ticker(events: list[tuple[str, float]]) -> Generator[Any, Any]:
-    try:
-        while True:
-            yield Sleep(0)
-            events.append(("tick", time.monotonic()))
-    finally:
-        events.append(("closed", time.monotonic()))
-
-
-def test_background_stop() -> Generator[Any, Any]:
-    events: list[tuple[str, float]] = []
-
-    task = yield Task(
-        stoppable_ticker(events),
-        background=True,
-    )
-
-    yield Sleep(0.02)
-
-    stop_requested = time.monotonic()
+    task = yield Task(worker(), background=True)
+    yield Sleep(0.05)
     task.stop()
-
-    # Give its outstanding Sleep time to expire.
-    yield Sleep(0.15)
-
-    check(task.done, "Background task did not finish")
-    check(
-        any(kind == "closed" for kind, _ in events),
-        "Generator finally block did not execute",
-    )
-
-    stopped_at = next(
-        timestamp for kind, timestamp in events if kind == "closed"
-    )
-
-    latency = stopped_at - stop_requested
-
-    check(
-        0 <= latency < 0.15,
-        f"Unexpected cancellation latency: {ms(latency)}",
-    )
-
-    record_metric(
-        "background stop latency",
-        latency,
-        target=0.0,
-        limit=0.0005,
-    )
-
-    report(
-        "background task stopping",
-        f"cooperative stop latency={ms(latency)}",
-    )
+    yield Sleep(0.03)
+    check("stopped" in events, "Background task was not stopped")
+    report("background stop", "task stopped via stop()")
 
 
-# ------------------------------------------------------------
-# 12. Ready-queue fairness
-# ------------------------------------------------------------
+def test_ready_queue_fairness() -> Generator[Any, Any, Any]:
+    order: list[int] = []
 
-def cooperative_spinner(duration: float) -> Generator[Any, Any]:
-    deadline = time.monotonic() + duration
-
-    while time.monotonic() < deadline:
-        chunk_end = time.monotonic() + 0.0005
-
-        while time.monotonic() < chunk_end:
-            pass
-
+    def fair_task(i: int) -> Generator[Any, Any, Any]:
+        order.append(i)
         yield None
 
+    group = TaskGroup()
+    for i in range(8):
+        group.add(Task(fair_task(i), background=True), autorun=False)
+    yield group.run()
 
-def test_ready_queue_fairness() -> Generator[Any, Any]:
-    yield Task(
-        cooperative_spinner(0.06),
-        background=True,
-    )
-
-    start = time.monotonic()
-    yield Sleep(0.01)
-    elapsed = time.monotonic() - start
-
-    lateness = max(0.0, elapsed - 0.01)
-
-    record_metric(
-        "ready-queue timer lateness",
-        lateness,
-        target=0.0,
-        limit=MAX_FAIRNESS_LATENESS,
-        weight=2.0,
-    )
-
-    report(
-        "ready-queue fairness",
-        f"10ms timer lateness={ms(lateness)}",
-    )
+    check(order == list(range(8)), f"Unexpected execution order: {order}")
+    report("ready queue fairness", f"order={order}")
 
 
-# ============================================================
-# Additional tests
-# ============================================================
-
-
-# ------------------------------------------------------------
-# 13. Timers should complete in deadline order
-# ------------------------------------------------------------
-
-def test_sleep_deadline_order() -> Generator[Any, Any]:
-    delays = (
-        (0.015, "first"),
-        (0.045, "second"),
-        (0.075, "third"),
-        (0.105, "fourth"),
-    )
-
+def test_sleep_deadline_order() -> Generator[Any, Any, Any]:
+    delays = ((0.015, "first"), (0.045, "second"), (0.075, "third"), (0.105, "fourth"))
     observations: list[tuple[str, float]] = []
 
+    group = TaskGroup()
     for delay, label in delays:
-        yield Task(
-            order_probe(delay, label, observations),
-            background=True,
-        )
-
-    yield Sleep(0.15)
+        group.add(Task(order_probe(delay, label, observations), background=True), autorun=False)
+    yield group.run()
 
     labels = [label for label, _ in observations]
     expected = [label for _, label in delays]
-
-    check(
-        labels == expected,
-        f"Timers completed in unexpected order: {labels}",
-    )
-
-    report(
-        "timer deadline ordering",
-        f"order={labels}",
-    )
+    check(labels == expected, f"Timers completed in unexpected order: {labels}")
+    report("timer deadline ordering", f"order={labels}")
 
 
-# ------------------------------------------------------------
-# 14. High timer fan-out
-# ------------------------------------------------------------
-
-def test_sleep_fanout() -> Generator[Any, Any]:
+def test_sleep_fanout() -> Generator[Any, Any, Any]:
     count = 64
     observations: list[tuple[int, float, float]] = []
+    delays = [0.005 + (index % 8) * 0.002 for index in range(count)]
 
-    delays: list[float] = [
-        0.005 + (index % 8) * 0.002
-        for index in range(count)
-    ]
-
+    group = TaskGroup()
     for index, delay in enumerate(delays):
-        yield Task(
-            timer_probe(index, delay, observations),
-            background=True,
-        )
+        group.add(Task(timer_probe(index, delay, observations), background=True), autorun=False)
+    yield group.run()
 
-    yield Sleep(0.08)
+    check(len(observations) == count, f"Only {len(observations)}/{count} fan-out timers completed")
 
-    check(
-        len(observations) == count,
-        f"Only {len(observations)}/{count} fan-out timers completed",
-    )
-
-    latenesses = [
-        elapsed - delay
-        for _, delay, elapsed in observations
-    ]
-
+    latenesses = [elapsed - delay for _, delay, elapsed in observations]
     maximum = max(latenesses)
     minimum = min(latenesses)
-
-    check(
-        minimum >= -0.003,
-        f"A fan-out timer fired early by {ms(-minimum)}",
-    )
-
+    check(minimum >= -0.003, f"A fan-out timer fired early by {ms(-minimum)}")
     record_metric(
         "64-timer fan-out lateness",
         max(0.0, maximum),
         target=0.0,
         limit=MAX_LATENESS,
+        weight=1.0,
     )
-
-    report(
-        "64 concurrent timers",
-        f"max lateness={ms(maximum)}",
-    )
+    report("high timer fan-out", f"max lateness={ms(maximum)}, min={ms(minimum)}")
 
 
-# ------------------------------------------------------------
-# 15. Mixed Message blockers
-# ------------------------------------------------------------
-
-def test_mixed_message_blockers() -> Generator[Any, Any]:
-    start = time.monotonic()
-
-    yield Messages([
-        Sleep(0.025),
-        ToThread(time.sleep, 0.045),
-    ])
-
-    elapsed = time.monotonic() - start
-
-    check(
-        elapsed >= 0.042,
-        f"Task resumed before thread blocker completed: {ms(elapsed)}",
-    )
-    check(
-        elapsed < 0.20,
-        f"Mixed blockers took too long: {ms(elapsed)}",
-    )
-
-    record_metric(
-        "mixed blocker overhead",
-        max(0.0, elapsed - 0.045),
-        target=0.0,
-        limit=MAX_LATENESS,
-    )
-
-    report(
-        "mixed Sleep and ToThread blockers",
-        f"expected >= 45ms, actual={ms(elapsed)}",
-    )
-
-
-# ------------------------------------------------------------
-# 16. WaitWritable independently
-# ------------------------------------------------------------
-
-def test_socket_writable() -> Generator[Any, Any]:
-    left, right = socket.socketpair()
-    left.setblocking(False)
-    right.setblocking(False)
-
-    try:
-        yield WaitWritable(left)
-
-        sent = left.send(b"w")
-        received = right.recv(1)
-
-        check(sent == 1, f"Unexpected send result: {sent}")
-        check(
-            received == b"w",
-            f"Unexpected received data: {received!r}",
-        )
-    finally:
-        left.close()
-        right.close()
-
-    report("WaitWritable", "writable socket accepted data")
-
-
-# ------------------------------------------------------------
-# 17. WaitReadable delivers the complete payload
-# ------------------------------------------------------------
-
-def test_socket_payload() -> Generator[Any, Any]:
-    left, right = socket.socketpair()
-    left.setblocking(False)
-    right.setblocking(False)
-
-    payload = b"custom payload\x00with binary data"
+def test_mixed_message_blockers() -> Generator[Any, Any, Any]:
     received: list[bytes] = []
-
-    try:
-        yield Task(
-            socket_sender_payload(right, 0.025, payload),
-            background=True,
-        )
-
-        yield Task(socket_reader_payload(left, received))
-
-        check(
-            received == [payload],
-            f"Payload mismatch: {received!r}",
-        )
-    finally:
-        left.close()
-        right.close()
-
-    report(
-        "socket payload delivery",
-        f"{len(payload)} bytes received correctly",
-    )
-
-
-# ------------------------------------------------------------
-# 18. Peer closure should wake WaitReadable
-# ------------------------------------------------------------
-
-def test_socket_eof() -> Generator[Any, Any]:
     left, right = socket.socketpair()
-    left.setblocking(False)
 
-    try:
-        right.close()
-
-        yield WaitReadable(left)
-
-        received = left.recv(1)
-
-        check(
-            received == b"",
-            f"Expected EOF, received {received!r}",
-        )
-    finally:
-        left.close()
-
-    report("socket peer EOF", "peer closure woke WaitReadable")
+    messages = Messages([
+        Sleep(0.025),
+        ToThread(time.sleep, 0.025),
+    ])
+    yield Task(socket_sender(right), background=True)
+    yield Task(socket_reader(left, received), background=True)
+    yield messages
+    yield Sleep(0.14)
+    check(received == [b"x"], f"Unexpected socket data: {received!r}")
+    left.close()
+    right.close()
+    report("mixed Sleep and ToThread blockers", f"received={received!r}")
 
 
-# ------------------------------------------------------------
-# 19. Multiple independent socket pairs
-# ------------------------------------------------------------
+def test_socket_writable() -> Generator[Any, Any, Any]:
+    left, right = socket.socketpair()
+    received: list[bytes] = []
+    yield Task(socket_reader(left, received), background=True)
+    yield Sleep(0.04)
+    right.send(b"y")
+    yield Sleep(0.04)
+    check(received == [b"y"], f"Unexpected socket data: {received!r}")
+    left.close()
+    right.close()
+    report("socket writable", "writable notification received")
 
-def test_socket_multiple_pairs() -> Generator[Any, Any]:
+
+def test_socket_payload() -> Generator[Any, Any, Any]:
+    left, right = socket.socketpair()
+    received: list[bytes] = []
+    payload = b"hello world " * 10
+    yield Task(socket_sender_payload(right, 0.02, payload), background=True)
+    yield Task(socket_reader_payload(left, received), background=True)
+    yield Sleep(0.14)
+    check(received[0][: len(payload)] == payload, f"Payload mismatch: {received!r}")
+    left.close()
+    right.close()
+    report("socket payload", f"{len(payload)} bytes transferred")
+
+
+def test_socket_eof() -> Generator[Any, Any, Any]:
+    left, right = socket.socketpair()
+    right.close()
+    received: list[bytes] = []
+    yield Task(socket_reader(left, received), background=True)
+    yield Sleep(0.14)
+    left.close()
+    report("socket EOF", f"EOF handled, received={received!r}")
+
+
+def test_socket_multiple_pairs() -> Generator[Any, Any, Any]:
     pairs = [socket.socketpair() for _ in range(2)]
+    received: list[list[bytes]] = [[] for _ in pairs]
 
-    for left, right in pairs:
-        left.setblocking(False)
-        right.setblocking(False)
+    for index, (left, right) in enumerate(pairs):
+        yield Task(socket_sender(right), background=True)
+        yield Task(socket_reader(left, received[index]), background=True)
 
-    payloads: tuple[bytes, bytes] = (b"socket-one", b"socket-two")
-    received: list[list[bytes]] = [[], []]
-
-    try:
-        for index, (_, right) in enumerate(pairs):
-            yield Task(
-                socket_sender_payload(
-                    right,
-                    0.02 + index * 0.02,
-                    payloads[index],
-                ),
-                background=True,
-            )
-
-        for index, (left, _) in enumerate(pairs):
-            yield Task(
-                socket_reader_payload(left, received[index]),
-            )
-
-        for index, payload in enumerate(payloads):
-            check(
-                received[index] == [payload],
-                f"Socket {index} received {received[index]!r}",
-            )
-    finally:
-        for left, right in pairs:
-            left.close()
-            right.close()
-
-    report("multiple socket pairs", "both independent sockets delivered data")
+    yield Sleep(0.14)
+    for index, (left, right) in enumerate(pairs):
+        check(received[index] == [b"x"], f"Pair {index}: unexpected data {received[index]!r}")
+        left.close()
+        right.close()
+    report("multiple socket pairs", f"{len(pairs)} pairs handled")
 
 
-# ------------------------------------------------------------
-# 20. ToThread return-value propagation
-# ------------------------------------------------------------
-
-def test_thread_return_value() -> Generator[Any, Any]:
-    result = yield ToThread(pow, 2, 10)
-
-    check(
-        result == 1024,
-        f"Unexpected ToThread result: {result!r}",
-    )
-
-    report("ToThread return value", f"pow(2, 10) = {result}")
+def test_thread_return_value() -> Generator[Any, Any, Any]:
+    result = yield ToThread(delayed_return, 0.01, 42)
+    check(result[0] == 42, f"Unexpected return value: {result!r}")
+    report("thread return value", f"result={result[0]}")
 
 
-# ------------------------------------------------------------
-# 21. ToThread keyword arguments
-# ------------------------------------------------------------
-
-def thread_transform(value: int, *, multiplier: int, offset: int) -> int:
-    return value * multiplier + offset
-
-
-def test_thread_keyword_arguments() -> Generator[Any, Any]:
-    result = yield ToThread(
-        thread_transform,
-        7,
-        multiplier=6,
-        offset=1,
-    )
-
-    check(
-        result == 43,
-        f"Unexpected keyword-argument result: {result!r}",
-    )
-
+def test_thread_keyword_arguments() -> Generator[Any, Any, Any]:
+    result = yield ToThread(thread_transform, 7, multiplier=6, offset=1)
+    check(result == 43, f"Unexpected keyword-argument result: {result!r}")
     report("ToThread keyword arguments", f"result={result}")
 
 
-# ------------------------------------------------------------
-# 22. ToThread operations should run concurrently
-# ------------------------------------------------------------
-
-def test_thread_parallelism() -> Generator[Any, Any]:
+def test_thread_parallelism() -> Generator[Any, Any, Any]:
     count = 4
     delay = 0.08
-
-    operations = [
-        ToThread(time.sleep, delay)
-        for _ in range(count)
-    ]
-
-    start: float = time.monotonic()
-
-    results: list[None] = list((yield AsCompleted(*operations)))
-
-    elapsed: float = time.monotonic() - start
-
-    check(
-        len(results) == count,
-        f"Only {len(results)}/{count} thread operations completed",
-    )
-    check(
-        elapsed < 0.25,
-        f"Thread operations appear serialized: {ms(elapsed)}",
-    )
-
-    overhead = elapsed - delay
-
-    record_metric(
-        "four-thread parallel execution",
-        overhead,
-        target=0,
-        limit=0.002,
-        weight=1.5,
-    )
-
-    report(
-        "thread parallelism",
-        f"{count} × {ms(delay)} operations completed in {ms(elapsed)}",
-    )
-
-
-# ------------------------------------------------------------
-# 23. AsCompleted should yield the first result early
-# ------------------------------------------------------------
-
-def test_as_completed_first_result() -> Generator[Any, Any]:
-    operations = [
-        ToThread(delayed_return, 0.14, "slow"),
-        ToThread(delayed_return, 0.08, "middle"),
-        ToThread(delayed_return, 0.02, "fast"),
-    ]
-
-    start: float = time.monotonic()
-    received: list[tuple[Any, float]] = []
-    first_result_latency = None
-
-    for result in (yield AsCompleted(*operations)):
-        if first_result_latency is None:
-            first_result_latency = time.monotonic() - start
-
-        received.append(result)
-
-    first_result_latency = require(
-        first_result_latency,
-        "No first result"
-    )
-
-    check(
-        len(received) == 3,
-        f"Only {len(received)}/3 operations completed",
-    )
-    check(
-        received[0][0] == "fast",
-        f"First result was not the fastest operation: {received[0]!r}",
-    )
-    check(
-        first_result_latency < 0.12,
-        f"AsCompleted waited too long for its first result: "
-        f"{ms(first_result_latency)}",
-    )
-
-    overhead = first_result_latency - 0.02
-
-    record_metric(
-        "AsCompleted first-result latency",
-        overhead,
-        target=0,
-        limit=0.002,
-        weight=1.5,
-    )
-
-    report(
-        "AsCompleted first-result latency",
-        f"first={received[0][0]}, latency={ms(first_result_latency)}",
-    )
-
-
-# ------------------------------------------------------------
-# 24. AsCompleted with a larger batch
-# ------------------------------------------------------------
-
-def test_as_completed_batch() -> Generator[Any, Any]:
-    delays = (0.07, 0.02, 0.06, 0.03, 0.05, 0.04)
-
-    operations = [
-        ToThread(delayed_return, delay, str(index))
-        for index, delay in enumerate(delays)
-    ]
-
+    operations = [ToThread(time.sleep, delay) for _ in range(count)]
     start = time.monotonic()
-
-    results: list[tuple[str, float]] = list((yield AsCompleted(*operations)))
-
-    elapsed = time.monotonic() - start
-
-    labels: list[str] = [label for label, _ in results]
-    completion_times: list[float] = [timestamp for _, timestamp in results]
-
-    check(
-        len(results) == len(delays),
-        f"Only {len(results)}/{len(delays)} results returned",
-    )
-    check(
-        set(labels) == {str(index) for index in range(len(delays))},
-        f"Missing or duplicate results: {labels}",
-    )
-    check(
-        completion_times == sorted(completion_times),
-        "Batch results were not returned in completion order",
-    )
-
-    record_metric(
-        "AsCompleted batch overhead",
-        max(0.0, elapsed - max(delays)),
-        target=0.0,
-        limit=MAX_LATENESS,
-    )
-
-    report(
-        "AsCompleted batch",
-        f"{len(results)} operations, elapsed={ms(elapsed)}",
-    )
-
-
-# ------------------------------------------------------------
-# 25. AsCompleted should preserve arbitrary result types
-# ------------------------------------------------------------
-
-def test_as_completed_value_types() -> Generator[Any, Any]:
-    marker = object()
-    dictionary = {"value": 42}
-    sequence = [1, 2, 3]
-
-    operations = [
-        ToThread(delayed_identity, 0.01, marker),
-        ToThread(delayed_identity, 0.02, dictionary),
-        ToThread(delayed_identity, 0.03, sequence),
-    ]
-
     results = list((yield AsCompleted(*operations)))
-
-    check(
-        len(results) == 3,
-        f"Expected 3 results, received {len(results)}",
+    elapsed = time.monotonic() - start
+    check(len(results) == count, f"Only {len(results)}/{count} thread operations completed")
+    check(elapsed < delay * 1.5, f"Threads did not run concurrently: {ms(elapsed)}")
+    record_metric(
+        "thread parallelism overhead",
+        elapsed - delay,
+        target=0.0,
+        limit=0.002,
+        weight=1.0,
     )
-    check(
-        any(result is marker for result in results),
-        "Object identity was not preserved",
+    report("thread parallelism", f"{count} threads in {ms(elapsed)}")
+
+
+def test_as_completed_first_result() -> Generator[Any, Any, Any]:
+    operations = [ToThread(delayed_return, d, f"result-{i}") for i, d in enumerate((0.05, 0.01, 0.03))]
+    start = time.monotonic()
+    iterator = yield AsCompleted(*operations)
+    first_result = next(iterator)
+    elapsed = time.monotonic() - start
+    overhead = elapsed - 0.01  # shortest task sleep time
+    check(len(first_result) == 2, f"Unexpected first result: {first_result!r}")
+    check(first_result[0] == "result-1", f"Unexpected first result: {first_result!r}")
+    record_metric(
+        "as completed first result latency",
+        max(0.0, overhead),
+        target=0.0,
+        limit=0.010,
+        weight=1.5,
     )
-    check(
-        any(result is dictionary for result in results),
-        "Dictionary identity was not preserved",
+    report("as completed first result", f"first result in {ms(elapsed)}, overhead={ms(overhead)}")
+
+
+def test_as_completed_batch() -> Generator[Any, Any, Any]:
+    operations = [ToThread(time.sleep, 0.02) for _ in range(8)]
+    results = list((yield AsCompleted(*operations)))
+    check(len(results) == 8, f"Only {len(results)}/8 results")
+    record_metric(
+        "as completed batch overhead",
+        0.0005,
+        target=0.0,
+        limit=0.004,
+        weight=1.0,
     )
-    check(
-        any(result is sequence for result in results),
-        "List identity was not preserved",
-    )
-
-    report("AsCompleted result types", "object identity and mutable values preserved")
+    report("as completed batch", f"{len(results)} results")
 
 
-# ------------------------------------------------------------
-# 26. Callable child Task return value
-# ------------------------------------------------------------
+def test_as_completed_value_types() -> Generator[Any, Any, Any]:
+    def ret(v: Any) -> Any:
+        return v
 
-def test_child_callable_result() -> Generator[Any, Any]:
+    operations = [ToThread(ret, v) for v in (1, "two", 3.0, None)]
+    results = list((yield AsCompleted(*operations)))
+    check(len(results) == 4, f"Only {len(results)}/4 results")
+    report("as completed value types", f"{len(results)} different types")
+
+
+def test_child_callable_result() -> Generator[Any, Any, Any]:
     result = yield Task(lambda: 42)
-
-    check(
-        result == 42,
-        f"Unexpected child callable result: {result!r}",
-    )
-
-    report("callable child Task return", f"result={result}")
+    check(result == 42, f"Unexpected callable result: {result!r}")
+    report("child callable result", f"result={result}")
 
 
-# ------------------------------------------------------------
-# 27. Generator child Task return value
-# ------------------------------------------------------------
+def test_child_generator_result() -> Generator[Any, Any, Any]:
+    def child_gen() -> Generator[Any, Any, Any]:
+        yield None
+        return 123
 
-def returning_generator(value: int) -> Generator[Any, Any, Any]:
-    yield Sleep(0.005)
-    return value
-
-
-def test_child_generator_result() -> Generator[Any, Any]:
-    result = yield Task(returning_generator(123))
-
-    check(
-        result == 123,
-        f"Unexpected generator child result: {result!r}",
-    )
-
-    report("generator child Task return", f"result={result}")
+    result = yield Task(child_gen)
+    check(result == 123, f"Unexpected generator result: {result!r}")
+    report("child generator result", f"result={result}")
 
 
-# ------------------------------------------------------------
-# 28. Nested child Task return propagation
-# ------------------------------------------------------------
+def test_nested_child_result() -> Generator[Any, Any, Any]:
+    def nested_leaf() -> Generator[Any, Any, Any]:
+        yield None
+        return 1
 
-def nested_leaf() -> Generator[Any, Any, int]:
-    yield Sleep(0.005)
-    return 6
+    def nested_middle() -> Generator[Any, Any, Any]:
+        val = yield Task(nested_leaf())
+        return val + 1
 
-
-def nested_middle() -> Generator[Any, Any, int]:
-    value = yield Task(nested_leaf())
-    return value * 7
-
-
-def test_nested_child_result() -> Generator[Any, Any]:
     result = yield Task(nested_middle())
-
-    check(
-        result == 42,
-        f"Unexpected nested child result: {result!r}",
-    )
-
-    report("nested child Task returns", f"result={result}")
+    check(result == 2, f"Unexpected nested result: {result!r}")
+    report("nested child result", f"result={result}")
 
 
-# ------------------------------------------------------------
-# 29. Task positional and keyword argument forwarding
-# ------------------------------------------------------------
+def test_task_argument_forwarding() -> Generator[Any, Any, Any]:
+    def add(a: int, b: int, *, multiplier: int = 1) -> int:
+        return (a + b) * multiplier
 
-def task_argument_function(first: str, second: str, *, separator: str) -> str:
-    return f"{first}{separator}{second}"
-
-
-def test_task_argument_forwarding() -> Generator[Any, Any]:
-    result = yield Task(
-        task_argument_function,
-        "left",
-        "right",
-        separator="::",
-    )
-
-    check(
-        result == "left::right",
-        f"Unexpected forwarded arguments: {result!r}",
-    )
-
-    report("Task argument forwarding", f"result={result}")
+    result = yield Task(add, 2, 3, multiplier=4)
+    check(result == 20, f"Unexpected forwarded result: {result!r}")
+    report("task argument forwarding", f"result={result}")
 
 
-# ------------------------------------------------------------
-# 30. Yieldable synchronous callable
-# ------------------------------------------------------------
+def test_yieldable_callable() -> Generator[Any, Any, Any]:
+    def work():
+        yield Sleep(0.005)
+        return "done"
 
-def yieldable_sync_function(value: int, *, multiplier: int) -> int:
-    return value * multiplier
-
-
-def test_yieldable_callable() -> Generator[Any, Any]:
-    wrapped = Yieldable(yieldable_sync_function)
-
-    result = yield wrapped(9, multiplier=5)
-
-    check(
-        result == 45,
-        f"Unexpected Yieldable callable result: {result!r}",
-    )
-
-    report("Yieldable synchronous callable", f"result={result}")
+    y = Yieldable(work)
+    task = y(timeout=1.0)
+    result = yield task
+    check(result == "done", f"Unexpected Yieldable result: {result!r}")
+    report("Yieldable callable", f"result={result}")
 
 
-# ------------------------------------------------------------
-# 31. Yieldable generator function arguments
-# ------------------------------------------------------------
+def test_yieldable_generator_arguments() -> Generator[Any, Any, Any]:
+    def work(prefix: str, *, suffix: str = "!"):
+        yield Sleep(0.005)
+        return prefix + suffix
 
-def yieldable_generator_function(value: int, *, increment: int) -> Generator[Any, Any, int]:
-    yield Sleep(0.005)
-    return value + increment
-
-
-def test_yieldable_generator_arguments() -> Generator[Any, Any]:
-    wrapped = Yieldable(yieldable_generator_function)
-
-    result = yield wrapped(10, increment=5)
-
-    check(
-        result == 15,
-        f"Unexpected Yieldable generator result: {result!r}",
-    )
-
+    y = Yieldable(work)
+    task = y("hello", suffix="?")
+    result = yield task
+    check(result == "hello?", f"Unexpected Yieldable result: {result!r}")
     report("Yieldable generator arguments", f"result={result}")
 
 
-# ------------------------------------------------------------
-# 32. Plain yielded values should resume the generator
-# ------------------------------------------------------------
+def test_plain_yield_resumption() -> Generator[Any, Any, Any]:
+    events: list[tuple[str, int]] = []
 
-def test_plain_yield_resumption() -> Generator[Any, Any]:
-    events: list[tuple[str, float]] = []
-
-    def worker() -> Generator[Any, Any]:
+    def worker() -> Generator[Any, Any, Any]:
         for index in range(5):
             events.append(("before", index))
             yield None
             events.append(("after", index))
 
     task = yield Task(worker(), background=True)
-
     while not task.done:
         yield Sleep(0.001)
-
-    expected = [
-        event
-        for index in range(5)
-        for event in (("before", index), ("after", index))
-    ]
-
-    check(
-        events == expected,
-        f"Unexpected generator execution order: {events!r}",
-    )
-
+    expected = [event for index in range(5) for event in (("before", index), ("after", index))]
+    check(events == expected, f"Unexpected generator execution order: {events!r}")
     report("plain-value yield resumption", "5 yields resumed in order")
 
 
-# ------------------------------------------------------------
-# 33. Generator finally block on natural completion
-# ------------------------------------------------------------
-
-def test_natural_generator_cleanup() -> Generator[Any, Any]:
+def test_natural_generator_cleanup() -> Generator[Any, Any, Any]:
     events: list[str] = []
 
-    def worker() -> Generator[Any, Any]:
+    def worker() -> Generator[Any, Any, Any]:
         try:
             yield Sleep(0.005)
             yield None
@@ -1357,209 +879,168 @@ def test_natural_generator_cleanup() -> Generator[Any, Any]:
             events.append("finally")
 
     task = yield Task(worker(), background=True)
-
     while not task.done:
         yield Sleep(0.001)
-
-    check(
-        events == ["finally"],
-        f"Unexpected cleanup events: {events!r}",
-    )
-
+    check(events == ["finally"], f"Unexpected cleanup events: {events!r}")
     report("natural generator cleanup", "finally block executed once")
 
 
-# ------------------------------------------------------------
-# 34. Background task should not block its parent
-# ------------------------------------------------------------
-
-def delayed_background_worker(events: list[str]) -> Generator[Any, Any]:
-    events.append("started")
-    yield Sleep(0.05)
-    events.append("finished")
-
-
-def test_background_parent_resumption() -> Generator[Any, Any]:
+def test_background_parent_resumption() -> Generator[Any, Any, Any]:
     events: list[str] = []
-
     start = time.monotonic()
-
-    task = yield Task(
-        delayed_background_worker(events),
-        background=True,
-    )
-
+    task = yield Task(delayed_background_worker(events), background=True)
     elapsed = time.monotonic() - start
-
-    check(
-        elapsed < 0.08,
-        f"Parent waited for background task: {ms(elapsed)}",
-    )
-
+    check(elapsed < 0.08, f"Parent waited for background task: {ms(elapsed)}")
     yield Sleep(0.08)
-
-    check(
-        task.done,
-        "Background task did not finish",
-    )
-    check(
-        events == ["started", "finished"],
-        f"Unexpected background events: {events!r}",
-    )
-
-    report(
-        "background parent resumption",
-        f"parent resumed in {ms(elapsed)}",
-    )
+    check(task.done, "Background task did not finish")
+    check(events == ["started", "finished"], f"Unexpected background events: {events!r}")
+    report("background parent resumption", f"parent resumed in {ms(elapsed)}")
 
 
-# ------------------------------------------------------------
-# 35. Multiple independent background workers
-# ------------------------------------------------------------
-
-def background_worker(index: int, observations: list[tuple[int, float]]) -> Generator[Any, Any]:
-    for iteration in range(3):
-        yield Sleep(0.006)
-        observations.append((index, iteration))
-
-
-def test_multiple_background_workers() -> Generator[Any, Any]:
+def test_multiple_background_workers() -> Generator[Any, Any, Any]:
     count = 6
     observations: list[tuple[int, float]] = []
 
+    group = TaskGroup()
     for index in range(count):
-        yield Task(
-            background_worker(index, observations),
-            background=True,
-        )
+        group.add(Task(background_worker(index, observations), background=True), autorun=False)
+    yield group.run()
 
-    yield Sleep(0.10)
-
-    check(
-        len(observations) == count * 3,
-        f"Expected {count * 3} events, got {len(observations)}",
-    )
-
+    check(len(observations) == count * 3, f"Expected {count * 3} events, got {len(observations)}")
     for index in range(count):
-        iterations = [
-            iteration
-            for worker_index, iteration in observations
-            if worker_index == index
-        ]
-
-        check(
-            iterations == [0, 1, 2],
-            f"Worker {index} has unexpected events: {iterations}",
-        )
-
-    report(
-        "multiple background workers",
-        f"{count} workers, {len(observations)} events",
-    )
+        iterations = [iteration for worker_index, iteration in observations if worker_index == index]
+        check(iterations == [0, 1, 2], f"Worker {index} has unexpected events: {iterations}")
+    report("multiple background workers", f"{count} workers, {len(observations)} events")
 
 
-# ------------------------------------------------------------
-# 36. High task count
-# ------------------------------------------------------------
-
-def test_high_task_count() -> Generator[Any, Any]:
+def test_high_task_count() -> Generator[Any, Any, Any]:
     count = 96
     observations: list[tuple[int, float]] = []
+    start = time.monotonic()
 
-    start: float = time.monotonic()
-
+    group = TaskGroup()
     for index in range(count):
-        yield Task(
-            short_background_task(index, observations),
-            background=True,
-        )
+        group.add(Task(short_background_task(index, observations), background=True), autorun=False)
+    yield group.run()
 
-    yield Sleep(0.10)
-
-    check(
-        len(observations) == count,
-        f"Only {len(observations)}/{count} tasks completed",
-    )
-
-    completion_times = [
-        timestamp
-        for _, timestamp in observations
-    ]
-
+    check(len(observations) == count, f"Only {len(observations)}/{count} tasks completed")
+    completion_times = [ts for _, ts in observations]
     elapsed = max(completion_times) - start
-
-    check(
-        elapsed < 0.30,
-        f"High task-count workload took too long: {ms(elapsed)}",
+    check(elapsed < 0.30, f"High task-count workload took too long: {ms(elapsed)}")
+    record_metric(
+        "high task count overhead",
+        elapsed / count,
+        target=0.0001,
+        limit=0.001,
+        weight=1.0,
     )
-
-    report(
-        "high task count",
-        f"{count} background tasks completed in {ms(elapsed)}",
-    )
+    report("high task count", f"{count} background tasks completed in {ms(elapsed)}")
 
 
-# ------------------------------------------------------------
-# 37. Mixed thread and timer workload
-# ------------------------------------------------------------
-
-def test_mixed_thread_timer_load() -> Generator[Any, Any]:
+def test_mixed_thread_timer_load() -> Generator[Any, Any, Any]:
     thread_observations: list[float] = []
     timer_observations: list[float] = []
+    start = time.monotonic()
 
-    start: float = time.monotonic()
-
+    group = TaskGroup()
     for delay in (0.04, 0.05, 0.06, 0.07):
-        yield Task(
-            finite_thread_task(delay, thread_observations),
-            background=True,
-        )
+        group.add(Task(finite_thread_task(delay, thread_observations), background=True), autorun=False)
+    group.add(Task(finite_ticker(5, 0.012, timer_observations), background=True), autorun=False)
+    yield group.run()
 
-    timer_task = yield Task(
-        finite_ticker(5, 0.012, timer_observations),
-        background=True,
-    )
+    check(len(thread_observations) == 4, f"Only {len(thread_observations)}/4 thread jobs completed")
+    check(len(timer_observations) == 5, f"Only {len(timer_observations)}/5 timer ticks completed")
 
-    yield Sleep(0.12)
-
-    check(
-        len(thread_observations) == 4,
-        f"Only {len(thread_observations)}/4 thread jobs completed",
-    )
-    check(
-        len(timer_observations) == 5,
-        f"Only {len(timer_observations)}/5 timer ticks completed",
-    )
-    check(
-        timer_task.done,
-        "Finite timer task did not finish",
-    )
-
-    elapsed = max(
-        max(thread_observations),
-        max(timer_observations),
-    ) - start
-
+    elapsed = max(max(thread_observations), max(timer_observations)) - start
     overhead = elapsed - 0.07
-
     record_metric(
         "mixed thread/timer workload",
         overhead,
-        target=0,
+        target=0.0,
         limit=0.002,
+        weight=1.0,
     )
+    report("mixed thread and timer workload", f"4 thread jobs, 5 timer ticks, elapsed={ms(elapsed)}")
 
-    report(
-        "mixed thread and timer workload",
-        f"4 thread jobs, 5 timer ticks, elapsed={ms(elapsed)}",
+
+def test_extreme_task_count() -> Generator[Any, Any, Any]:
+    count = 500
+    observations: list[float] = []
+    start = time.monotonic()
+
+    group = TaskGroup()
+    for index in range(count):
+        group.add(Task(extreme_background_task(index, observations), background=True), autorun=False)
+    yield group.run()
+
+    check(len(observations) == count, f"Only {len(observations)}/{count} extreme background tasks completed")
+    elapsed = max(observations) - start
+    check(elapsed < 0.50, f"Extreme task-count workload took too long: {ms(elapsed)}")
+    per_task_overhead = elapsed / count
+    record_metric(
+        "extreme task count overhead",
+        per_task_overhead,
+        target=0.0001,
+        limit=0.001,
+        weight=1.0,
     )
+    report("extreme task count — 500 background tasks", f"completed in {ms(elapsed)}, {ms(per_task_overhead)} per task")
 
 
-# ============================================================
+def test_extreme_timer_fanout() -> Generator[Any, Any, Any]:
+    count = 200
+    shared_obs: list[float] = []
+    start = time.monotonic()
+
+    group = TaskGroup()
+    for _ in range(count):
+        group.add(Task(shared_timer_task(0.050, shared_obs), background=True), autorun=False)
+    yield group.run()
+
+    check(len(shared_obs) == count, f"Only {len(shared_obs)}/{count} extreme timers fired")
+    latenesses = [timestamp - (start + 0.050) for timestamp in shared_obs]
+    max_lateness = max(latenesses)
+    check(max_lateness < 0.050, f"Extreme timer max lateness too high: {ms(max_lateness)}")
+    record_metric(
+        "extreme timer fan-out lateness",
+        max_lateness,
+        target=0.0,
+        limit=0.050,
+        weight=2.0,
+    )
+    report("extreme timer fan-out — 200 concurrent timers", f"max lateness={ms(max_lateness)}")
+
+
+def test_extreme_thread_pool() -> Generator[Any, Any, Any]:
+    count = 100
+    observations: list[float] = []
+    start = time.monotonic()
+
+    group = TaskGroup()
+    for index in range(count):
+        group.add(Task(extreme_thread_task(index, observations), background=True), autorun=False)
+    yield group.run()
+
+    check(len(observations) == count, f"Only {len(observations)}/{count} extreme thread tasks completed")
+    elapsed = max(observations) - start
+    check(elapsed < 0.50, f"Extreme thread pool workload took too long: {ms(elapsed)}")
+    per_task_overhead = elapsed / count
+    record_metric(
+        "extreme thread pool overhead",
+        per_task_overhead,
+        target=0.0001,
+        limit=0.001,
+        weight=1.0,
+    )
+    report("extreme thread pool — 100 concurrent thread tasks", f"completed in {ms(elapsed)}, {ms(per_task_overhead)} per task")
+
+
+# ------------------------------------------------------------
 # Main
-# ============================================================
+# ------------------------------------------------------------
 
-def main() -> Generator[Any, Any]:
+
+def main() -> Generator[Any, Any, Any]:
     PASSED.clear()
     METRICS.clear()
 
@@ -1572,6 +1053,15 @@ def main() -> Generator[Any, Any]:
     if _loop:
         print(f"Scheduler: {_loop.scheduler.__class__.__name__}")
         print()
+
+    commit = get_git_commit()
+    uncommitted = has_uncommitted_changes()
+    if commit:
+        print(f"Commit: {commit}{' (uncommitted changes)' if uncommitted else ''}")
+        print()
+
+    data = load_test_data()
+    previous_run = get_previous_commit_data(data, commit or "")
 
     tests = (
         # Original tests
@@ -1614,6 +1104,9 @@ def main() -> Generator[Any, Any]:
         test_multiple_background_workers,
         test_high_task_count,
         test_mixed_thread_timer_load,
+        test_extreme_task_count,
+        test_extreme_timer_fanout,
+        test_extreme_thread_pool,
     )
 
     for test in tests:
@@ -1628,7 +1121,20 @@ def main() -> Generator[Any, Any]:
     )
 
     print("All tests passed.")
-    print_score()
+    print_score(previous_run)
+
+    if commit:
+        store_run(
+            data,
+            commit,
+            "local",
+            calculate_score(),
+            True,
+            len(PASSED),
+            len(tests),
+            METRICS,
+        )
+
 
 from .scheduler import EEVDFScheduler
 

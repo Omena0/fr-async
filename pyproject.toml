@@ -43,7 +43,6 @@ include = ["fr_async*"]
 [tool.pyright]
 pythonVersion = "3.15"
 typeCheckingMode = "strict"
-exclude = ["fr_async/test.py"]
 reportMissingParameterType = "none"
 reportUnusedVariable = "none"
 reportUnusedImport = "none"

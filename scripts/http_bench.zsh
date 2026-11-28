@@ -10,7 +10,7 @@ sleep 1
 
 (
     cd ~/Github/http-c || exit 1
-    ./bench -c 32 -j 8 -t 30
+    ./bench -c 32 -j 8 -t 30 -P /README.md
 )
 
 kill "$server_pid"

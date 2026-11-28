@@ -310,6 +310,11 @@ class ExecutionLoop:
 
         try:
             result = self.run_task(task)
+        except StopIteration as exc:
+            task.done = True
+            task.result = exc.value
+            task.exception = None
+            result = exc.value
         except BaseException as exc:
             task.done = True
             task.exception = exc
@@ -358,6 +363,8 @@ class ExecutionLoop:
                 task.return_value(result)
                 self.schedule(task, task.parent, immediate=True)
                 return
+            # Non-background child: wait for its result via TaskJoin
+            self.handle_message(task, TaskJoin(cast('Task[Any]', result)))
             self.schedule(cast('Task[Any]', result), task, immediate=result.immediate)
             return
 
@@ -368,6 +375,11 @@ class ExecutionLoop:
         if isinstance(result, Messages):
             for message in result.messages:
                 self.handle_message(task, message)
+            return
+
+        # Generator yielded None — not done yet, reschedule
+        if result is None and not task.done:
+            self.schedule(task)
             return
 
         if parent is not None:

@@ -80,12 +80,21 @@ class Task[T=Any]:
         if timeout is not None and timeout < 0:
             raise ValueError('Task timeout must be non-negative.')
 
-        self.func: Generator[Any, Any, Any] | Callable[..., Any] = func
+        self.func: Generator[Any, Any, Any] | Callable[..., Any]
+
+        # If func is a generator function, call it to get the generator object.
+        # Regular callables are left as-is and invoked in __call__.
+        if inspect.isgeneratorfunction(func):
+            self.func = func(*args, **kwargs)
+            self.args = ()
+            self.kwargs = {}
+        else:
+            self.func = func
+            self.args = args
+            self.kwargs = kwargs
+
         self.immediate = immediate
         self.background = background
-
-        self.args = args
-        self.kwargs = kwargs
 
         self.parent: Task | None = parent
         self.done = False

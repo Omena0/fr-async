@@ -85,6 +85,7 @@ def server(
         task.run()
     '''
     from .classes import Task, Yieldable
+    from .loop import getEventLoop
     from .messages import Accept
 
     def serve(port: int, host: str = '0.0.0.0', backlog: int = 128):
@@ -100,7 +101,9 @@ def server(
             while True:
                 connections = yield Accept(listener)
                 for cs, addr in connections:
-                    Task(handler(cs, addr), background=True, immediate=True)
+                    getEventLoop().schedule(
+                        Task(handler(cs, addr), background=True), immediate=True
+                    )
 
         return Yieldable(accept_loop)
 

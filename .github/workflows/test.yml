@@ -21,6 +21,9 @@ jobs:
         with:
           python-version: '3.15t'
 
+      - name: Install dependencies
+        run: pip install -e .
+
       - name: Run test suite
         id: test
         run: |
@@ -39,11 +42,11 @@ jobs:
           {"schemaVersion":1,"label":"Test","message":"${score}%","color":"${color}"}
           EOF
 
-      - name: Commit badge
+      - name: Commit test data and badge
         if: github.ref == 'refs/heads/main'
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          git add .github/badges/test-score.json
-          git diff --cached --quiet || git commit -m "Update test score badge"
+          git add .test_data.json .github/badges/test-score.json
+          git diff --cached --quiet || git commit -m "Update test score data and badge"
           git push

@@ -1,0 +1,94 @@
+{
+  "commits": {
+    "4847081c94c584f2be6bd64fba0fbc68bf19101b": {
+      "local": {
+        "timestamp": "2026-11-28T16:49:48.791485+00:00",
+        "score": 72.36941834190583,
+        "passed": true,
+        "tests_passed": 40,
+        "total_tests": 40,
+        "metrics": {
+          "timer maximum lateness": {
+            "value": 0.0002034129995445253,
+            "target": 0.0,
+            "scale": 0.002,
+            "weight": 2.0
+          },
+          "periodic timer maximum lateness": {
+            "value": 0.0005836700004147131,
+            "target": 0.0,
+            "scale": 0.002,
+            "weight": 2.0
+          },
+          "concurrent timer maximum lateness": {
+            "value": 0.0019425489998684542,
+            "target": 0.0,
+            "scale": 0.002,
+            "weight": 1.5
+          },
+          "thread wakeup maximum lateness": {
+            "value": 0.0027072820012108423,
+            "target": 0.0,
+            "scale": 0.002,
+            "weight": 1.5
+          },
+          "64-timer fan-out lateness": {
+            "value": 0.0011251600000105099,
+            "target": 0.0,
+            "scale": 0.002,
+            "weight": 1.0
+          },
+          "thread parallelism overhead": {
+            "value": 0.0005577510000148306,
+            "target": 0.0,
+            "scale": 0.002,
+            "weight": 1.0
+          },
+          "as completed first result latency": {
+            "value": 0.0003435399996669728,
+            "target": 0.0,
+            "scale": 0.002,
+            "weight": 1.5
+          },
+          "as completed batch overhead": {
+            "value": 0.0005,
+            "target": 0.0,
+            "scale": 0.002,
+            "weight": 1.0
+          },
+          "high task count overhead": {
+            "value": 2.1882218751064404e-05,
+            "target": 0.0001,
+            "scale": 0.002,
+            "weight": 1.0
+          },
+          "mixed thread/timer workload": {
+            "value": 0.00044604200018510953,
+            "target": 0.0,
+            "scale": 0.002,
+            "weight": 1.0
+          },
+          "extreme task count overhead": {
+            "value": 6.467986200004816e-05,
+            "target": 0.0001,
+            "scale": 0.002,
+            "weight": 1.0
+          },
+          "extreme timer fan-out lateness": {
+            "value": 0.004858810001678648,
+            "target": 0.0,
+            "scale": 0.002,
+            "weight": 2.0
+          },
+          "extreme thread pool overhead": {
+            "value": 9.871084001133567e-05,
+            "target": 0.0001,
+            "scale": 0.002,
+            "weight": 1.0
+          }
+        }
+      },
+      "gh_actions": null
+    }
+  }
+}
