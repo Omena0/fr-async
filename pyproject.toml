@@ -61,11 +61,6 @@ extend-ignore = [
     "I001"
 ]
 
-exclude = [
-    "fr_async/http_bench.py",
-    "fr_async/server.py"
-]
-
 [tool.ruff.lint.mccabe]
 max-complexity = 18
 

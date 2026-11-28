@@ -1,51 +1,51 @@
 {
   "commits": {
-    "4e716a96fa2c53f26d6810e018c8df0ab33a7a7d": {
+    "4998cad536984aae16e1dc10373ecd2bb4e0f7c1": {
       "local": {
-        "timestamp": "2026-11-28T18:05:15.903632+00:00",
-        "score": 74.85650569950863,
+        "timestamp": "2026-11-28T18:18:46.536199+00:00",
+        "score": 62.134547512244275,
         "passed": true,
         "tests_passed": 40,
         "total_tests": 40,
         "metrics": {
           "timer maximum lateness": {
-            "value": 0.00028070400003343544,
+            "value": 0.0004154120008024592,
             "target": 0.0,
             "scale": 0.002,
             "weight": 2.0
           },
           "periodic timer maximum lateness": {
-            "value": 0.00022200459992745871,
+            "value": 0.00026773099874844754,
             "target": 0.0,
             "scale": 0.002,
             "weight": 2.0
           },
           "concurrent timer maximum lateness": {
-            "value": 0.0018299069994827776,
+            "value": 0.0019295800001418728,
             "target": 0.0,
             "scale": 0.002,
             "weight": 1.5
           },
           "thread wakeup maximum lateness": {
-            "value": 0.0012658170009672177,
+            "value": 0.0025889230018947273,
             "target": 0.0,
             "scale": 0.002,
             "weight": 1.5
           },
           "64-timer fan-out lateness": {
-            "value": 0.001110178400125005,
+            "value": 0.001147057999347452,
             "target": 0.0,
             "scale": 0.002,
             "weight": 1.0
           },
           "thread parallelism overhead": {
-            "value": 0.00047132260071520993,
+            "value": 0.0005932040002517153,
             "target": 0.0,
             "scale": 0.002,
             "weight": 1.0
           },
           "as completed first result latency": {
-            "value": 0.0005794482002238508,
+            "value": 0.0012043440003617432,
             "target": 0.0,
             "scale": 0.002,
             "weight": 1.5
@@ -57,32 +57,32 @@
             "weight": 1.0
           },
           "high task count overhead": {
-            "value": 2.1843416664069083e-05,
+            "value": 2.6839291668541893e-05,
             "target": 0.0001,
             "scale": 0.002,
             "weight": 1.0
           },
           "mixed thread/timer workload": {
-            "value": 0.00040288600001076036,
+            "value": 0.0008586740001919613,
             "target": 0.0,
             "scale": 0.002,
             "weight": 1.0
           },
           "extreme task count overhead": {
-            "value": 6.096755120015587e-05,
-            "target": 0.0001,
+            "value": 0.49072328500005824,
+            "target": 0.01,
             "scale": 0.002,
             "weight": 1.0
           },
           "extreme timer fan-out lateness": {
-            "value": 0.004708622601174284,
+            "value": 0.019087116001173854,
             "target": 0.0,
             "scale": 0.002,
             "weight": 2.0
           },
           "extreme thread pool overhead": {
-            "value": 8.84414759966603e-05,
-            "target": 0.0001,
+            "value": 0.04825026500111562,
+            "target": 0.05,
             "scale": 0.002,
             "weight": 1.0
           }

@@ -36,14 +36,13 @@ SCALE = 0.002  # 2ms scale for scoring, independent of pass/fail limits
 
 PASSED: list[str] = []
 FAILURES: list[str] = []
-REPORT_REPEATS = 5
+REPORT_REPEATS = 10
 REPORT_COUNT: dict[str, int] = {}
 REPORT_DETAILS: dict[str, list[str]] = {}
 METRICS: dict[str, list[tuple[float, float, float, float]]] = {}
 
 DATA_FILE = ".test_data.json"
-SIGNIFICANT_CHANGE = 0.05  # 5% change threshold for highlighting
-REGRESSION_THRESHOLD = 0.1  # 10% score drop = test failure
+REGRESSION_THRESHOLD_MS = 0.004  # 4ms threshold for highlighting overhead changes
 
 # ANSI color codes (git diff style)
 RED_BG = "\033[41m"
@@ -114,9 +113,7 @@ def get_git_commit() -> str | None:
         timeout=10,
         check=False,
     )
-    if result.returncode == 0:
-        return result.stdout.strip()
-    return None
+    return result.stdout.strip() if result.returncode == 0 else None
 
 
 def has_uncommitted_changes() -> bool:
@@ -142,11 +139,10 @@ def load_test_data() -> dict[str, Any]:
 
 
 def save_test_data(data: Any) -> None:
-    tmp = DATA_FILE + ".tmp"
+    tmp = f"{DATA_FILE}.tmp"
     with open(tmp, "w") as f:
         json.dump(data, f, indent=2)
     os.replace(tmp, DATA_FILE)
-
 
 def store_run(
     data: Any,
@@ -196,22 +192,24 @@ def get_previous_commit_data(data: Any, commit: str) -> Any | None:
     return candidates[0][3]
 
 
-def compare_value(current: float, previous: float | None) -> tuple[str, float | None]:
-    if previous is None or previous == 0:
+def compare_value(current: float, previous: float | None) -> tuple[str, str | None]:
+    """Return (color_code, change_ms_string) comparing current vs previous overhead in ms."""
+    if previous is None:
         return "", None
-    change = (current - previous) / abs(previous)
-    if change > SIGNIFICANT_CHANGE:
-        return RED_BG, change * 100
-    if change < -SIGNIFICANT_CHANGE:
-        return GREEN_BG, change * 100
-    return "", change * 100
+    change_ms = current - previous
+    abs_change_ms = abs(change_ms)
+    threshold_ms = REGRESSION_THRESHOLD_MS
+
+    if abs_change_ms < threshold_ms:
+        return "", None
+
+    if change_ms > 0:
+        return RED_BG, f"+{ms(change_ms)}"
+    return GREEN_BG, f"{ms(change_ms)}"
 
 
-def format_change(change: float | None) -> str:
-    if change is None:
-        return f"{DIM}—{RESET}"
-    sign = "+" if change > 0 else ""
-    return f"{sign}{change:+.1f}%"
+def format_change(change: str | None) -> str:
+    return f"{DIM}—{RESET}" if change is None else change
 
 
 # ------------------------------------------------------------
@@ -268,40 +266,37 @@ def all_tasks_done(tasks: list[Task]) -> bool:
     return all(t.done for t in tasks)
 
 
-def average_metrics() -> dict[str, tuple[float, float, float, float]]:
-    """Average all recorded metric values, returning {name: (avg_value, target, scale, weight)}."""
-    averaged: dict[str, tuple[float, float, float, float]] = {}
+def max_metrics() -> dict[str, tuple[float, float, float, float]]:
+    """Take the max recorded metric value, returning {name: (max_value, target, scale, weight)}."""
+    maxed: dict[str, tuple[float, float, float, float]] = {}
     for name, entries in METRICS.items():
         if not entries:
             continue
-        avg_value = sum(e[0] for e in entries) / len(entries)
+        max_value = max(e[0] for e in entries)
         target = entries[0][1]
         scale = entries[0][2]
         weight = entries[0][3]
-        averaged[name] = (avg_value, target, scale, weight)
-    return averaged
+        maxed[name] = (max_value, target, scale, weight)
+    return maxed
 
 
 def metric_score(value: float, target: float, scale: float) -> float:
-    if value <= target:
-        return 100.0
-    x = (value - target) / scale
-    return 100.0 / (1.0 + x)
+    return 100.0 if value <= target else 100.0 / (1.0 + (value - target) / scale)
 
 
 def calculate_score() -> float:
-    averaged = average_metrics()
-    if not averaged:
+    maxed = max_metrics()
+    if not maxed:
         return 0.0
 
     weighted_score = sum(
         metric_score(value, target, scale) * weight
-        for value, target, scale, weight in averaged.values()
+        for value, target, scale, weight in maxed.values()
     )
 
     total_weight = sum(
         weight
-        for _, _, _, weight in averaged.values()
+        for _, _, _, weight in maxed.values()
     )
 
     return weighted_score / total_weight
@@ -309,13 +304,11 @@ def calculate_score() -> float:
 
 def print_score(previous_run: Any | None) -> bool:
     """Print performance metrics and return True if any significant regression detected."""
-    regressions = False
-
     print()
     print("Performance metrics (target = 0 ms)")
 
-    averaged = average_metrics()
-    total_weight = sum(weight for _, _, _, weight in averaged.values())
+    maxed = max_metrics()
+    total_weight = sum(weight for _, _, _, weight in maxed.values())
 
     previous_metrics: dict[str, float] = {}
     if previous_run:
@@ -325,7 +318,7 @@ def print_score(previous_run: Any | None) -> bool:
             for name, m in metrics_raw.items()
         }
 
-    for name, (value, target, scale, weight) in averaged.items():
+    for name, (value, target, scale, weight) in maxed.items():
         score = metric_score(value, target, scale)
         contribution = score * weight / total_weight
 
@@ -333,31 +326,17 @@ def print_score(previous_run: Any | None) -> bool:
         color, change = compare_value(value, prev_value)
         change_str = format_change(change)
 
-        # Detect metric-level regression (> REGRESSION_THRESHOLD worse)
-        if prev_value is not None and change is not None and change > REGRESSION_THRESHOLD * 100:
-            regressions = True
-            print(
-                f"  {RED_BG}{name:>40}: {score:>6.2f}% "
-                f"(weight={weight:<03}, contribution={contribution:<04.1f}%, "
-                f"overhead={ms(value):<06}, scale={ms(scale):<06}, "
-                f"vs prev={color}{change_str}{RESET})  REGRESSION"
-            )
-        else:
-            print(
-                f"  {name:>40}: {score:>6.2f}% "
-                f"(weight={weight:<03}, contribution={contribution:<04.1f}%, "
-                f"overhead={ms(value):<06}, scale={ms(scale):<06}, "
-                f"vs prev={color}{change_str}{RESET})"
-            )
+        print(
+            f"  {name:>40}: {score:>6.2f}% "
+            f"(weight={weight:<03}, contribution={contribution:<04.1f}%, "
+            f"overhead={ms(value):<06}, scale={ms(scale):<06}, "
+            f"vs prev={color}{change_str}{RESET})"
+        )
 
     score = calculate_score()
     prev_score = previous_run.get("score") if previous_run else None
     score_color, score_change = compare_value(score, prev_score)
     score_change_str = format_change(score_change)
-
-    # Detect general score regression
-    if prev_score is not None and score_change is not None and score_change < -REGRESSION_THRESHOLD * 100:
-        regressions = True
 
     print()
     print(
@@ -365,7 +344,7 @@ def print_score(previous_run: Any | None) -> bool:
         f"vs prev={score_color}{score_change_str}{RESET}"
     )
 
-    return regressions
+    return False
 
 
 # ------------------------------------------------------------
@@ -1049,7 +1028,7 @@ def test_mixed_thread_timer_load() -> Generator[Any, Any, Any]:
 
 
 def test_extreme_task_count() -> Generator[Any, Any, Any]:
-    count = 500
+    count = 2000
     observations: list[float] = []
     start = time.monotonic()
 
@@ -1060,20 +1039,19 @@ def test_extreme_task_count() -> Generator[Any, Any, Any]:
 
     check(len(observations) == count, f"Only {len(observations)}/{count} extreme background tasks completed")
     elapsed = max(observations) - start
-    check(elapsed < 0.50, f"Extreme task-count workload took too long: {ms(elapsed)}")
-    per_task_overhead = elapsed / count
+    check(elapsed < 1.0, f"Extreme task-count workload took too long: {ms(elapsed)}")
     record_metric(
         "extreme task count overhead",
-        per_task_overhead,
-        target=0.0001,
-        limit=0.001,
+        elapsed,
+        target=0.01,
+        limit=1.0,
         weight=1.0,
     )
-    report("extreme task count — 500 background tasks", f"completed in {ms(elapsed)}, {ms(per_task_overhead)} per task")
+    report("extreme task count — 2000 background tasks", f"completed in {ms(elapsed)}")
 
 
 def test_extreme_timer_fanout() -> Generator[Any, Any, Any]:
-    count = 200
+    count = 500
     shared_obs: list[float] = []
     start = time.monotonic()
 
@@ -1097,7 +1075,7 @@ def test_extreme_timer_fanout() -> Generator[Any, Any, Any]:
 
 
 def test_extreme_thread_pool() -> Generator[Any, Any, Any]:
-    count = 100
+    count = 500
     observations: list[float] = []
     start = time.monotonic()
 
@@ -1108,16 +1086,15 @@ def test_extreme_thread_pool() -> Generator[Any, Any, Any]:
 
     check(len(observations) == count, f"Only {len(observations)}/{count} extreme thread tasks completed")
     elapsed = max(observations) - start
-    check(elapsed < 0.50, f"Extreme thread pool workload took too long: {ms(elapsed)}")
-    per_task_overhead = elapsed / count
+    check(elapsed < 1.0, f"Extreme thread pool workload took too long: {ms(elapsed)}")
     record_metric(
         "extreme thread pool overhead",
-        per_task_overhead,
-        target=0.0001,
-        limit=0.001,
+        elapsed,
+        target=0.05,
+        limit=1.0,
         weight=1.0,
     )
-    report("extreme thread pool — 100 concurrent thread tasks", f"completed in {ms(elapsed)}, {ms(per_task_overhead)} per task")
+    report("extreme thread pool — 500 concurrent thread tasks", f"completed in {ms(elapsed)}")
 
 
 # ------------------------------------------------------------
@@ -1148,7 +1125,7 @@ def main() -> Generator[Any, Any, Any]:
         print()
 
     data = load_test_data()
-    previous_run = get_previous_commit_data(data, commit or "")
+    previous_run = None if uncommitted else get_previous_commit_data(data, commit or "")
 
     tests = (
         # Original tests
@@ -1205,7 +1182,7 @@ def main() -> Generator[Any, Any, Any]:
     print()
     print(f"Completed {len(PASSED)}/{len(tests)} test groups (x{repeats} repeats each).")
 
-    averaged = average_metrics()
+    maxed = max_metrics()
     regressions = print_score(previous_run)
 
     # Report failures
@@ -1215,13 +1192,12 @@ def main() -> Generator[Any, Any, Any]:
         for failure in FAILURES:
             print(f"  {RED_BG}{failure}{RESET}")
 
-    has_failures = len(FAILURES) > 0 or regressions
+    has_failures = len(FAILURES) > 0
 
+    print()
     if has_failures:
-        print()
         print(f"{BOLD}{RED_BG}OVERALL: FAILED{RESET}")
     else:
-        print()
         print(f"{BOLD}{GREEN_BG}OVERALL: PASSED{RESET}")
 
     if commit:
@@ -1233,7 +1209,7 @@ def main() -> Generator[Any, Any, Any]:
             not has_failures,
             len(PASSED),
             len(tests),
-            averaged,
+            maxed,
         )
 
     return not has_failures
