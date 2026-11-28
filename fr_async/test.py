@@ -5,7 +5,7 @@ Stores last LOCAL and GH ACTIONS runs per commit in .test_data.json.
 """
 
 from typing import Any, Literal, TypeIs
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 import socket
 import math
 import time
@@ -35,10 +35,15 @@ MAX_FAIRNESS_LATENESS = 0.00035
 SCALE = 0.002  # 2ms scale for scoring, independent of pass/fail limits
 
 PASSED: list[str] = []
-METRICS: dict[str, tuple[float, float, float, float]] = {}
+FAILURES: list[str] = []
+REPORT_REPEATS = 5
+REPORT_COUNT: dict[str, int] = {}
+REPORT_DETAILS: dict[str, list[str]] = {}
+METRICS: dict[str, list[tuple[float, float, float, float]]] = {}
 
 DATA_FILE = ".test_data.json"
 SIGNIFICANT_CHANGE = 0.05  # 5% change threshold for highlighting
+REGRESSION_THRESHOLD = 0.1  # 10% score drop = test failure
 
 # ANSI color codes (git diff style)
 RED_BG = "\033[41m"
@@ -60,14 +65,28 @@ def require[T](value: T | None, message: str) -> T:
 
 def check(condition: bool, message: str) -> TypeIs[Literal[True]]:
     if not condition:
-        raise AssertionError(message)
-    return condition
+        FAILURES.append(message)
+        print(f"[FAIL] {message}")
+        return False
+    return True
 
 
 def report(name: str, details: str = "") -> None:
-    PASSED.append(name)
-    suffix = f" — {details}" if details else ""
-    print(f"[PASS] {name}{suffix}")
+    count = REPORT_COUNT.get(name, 0) + 1
+    REPORT_COUNT[name] = count
+    REPORT_DETAILS.setdefault(name, []).append(details)
+
+    if count < REPORT_REPEATS:
+        # In-place update: show progress (1/5, 2/5, ...) without newline
+        print(
+            f"\r[PASS] {name} ({count}/{REPORT_REPEATS}) {DIM}{details}{RESET}\033[K",
+            end="",
+            flush=True,
+        )
+    else:
+        # Final repeat: print with newline and add to PASSED
+        PASSED.append(name)
+        print(f"\r[PASS] {name} ({REPORT_REPEATS}/{REPORT_REPEATS}) {details}\033[K")
 
 
 def percentile(values: list[float], fraction: float) -> float:
@@ -212,6 +231,7 @@ def record_metric(
     """
     Record a lower-is-better performance metric.
 
+    Appends to a list so tests can run multiple times and values can be averaged.
     The limit is a hard pass/fail threshold.
     The scale determines scoring: score = 100 / (1 + (value - target) / scale).
     Scoring is independent of limit, so tightening limits won't change scores.
@@ -225,7 +245,41 @@ def record_metric(
         f"{name}: {ms(value)} exceeds the {ms(limit)} limit",
     )
 
-    METRICS[name] = (value, target, scale, weight)
+    METRICS.setdefault(name, []).append((value, target, scale, weight))
+
+
+def wait_until(
+    condition: Callable[[], bool],
+    timeout: float = 5.0,
+    interval: float = 0.001,
+    message: str = "condition not met",
+) -> Generator[Sleep[float], Any, bool]:
+    """Poll condition() until it returns True or timeout expires. Yields Sleeps between polls."""
+    start = time.monotonic()
+    while not condition():
+        if time.monotonic() - start >= timeout:
+            check(False, f"{message} (timed out after {ms(timeout)})")
+            return False
+        yield Sleep(interval)
+    return True
+
+
+def all_tasks_done(tasks: list[Task]) -> bool:
+    return all(t.done for t in tasks)
+
+
+def average_metrics() -> dict[str, tuple[float, float, float, float]]:
+    """Average all recorded metric values, returning {name: (avg_value, target, scale, weight)}."""
+    averaged: dict[str, tuple[float, float, float, float]] = {}
+    for name, entries in METRICS.items():
+        if not entries:
+            continue
+        avg_value = sum(e[0] for e in entries) / len(entries)
+        target = entries[0][1]
+        scale = entries[0][2]
+        weight = entries[0][3]
+        averaged[name] = (avg_value, target, scale, weight)
+    return averaged
 
 
 def metric_score(value: float, target: float, scale: float) -> float:
@@ -236,27 +290,32 @@ def metric_score(value: float, target: float, scale: float) -> float:
 
 
 def calculate_score() -> float:
-    if not METRICS:
+    averaged = average_metrics()
+    if not averaged:
         return 0.0
 
     weighted_score = sum(
         metric_score(value, target, scale) * weight
-        for value, target, scale, weight in METRICS.values()
+        for value, target, scale, weight in averaged.values()
     )
 
     total_weight = sum(
         weight
-        for _, _, _, weight in METRICS.values()
+        for _, _, _, weight in averaged.values()
     )
 
     return weighted_score / total_weight
 
 
-def print_score(previous_run: Any | None) -> None:
+def print_score(previous_run: Any | None) -> bool:
+    """Print performance metrics and return True if any significant regression detected."""
+    regressions = False
+
     print()
     print("Performance metrics (target = 0 ms)")
 
-    total_weight = sum(weight for _, _, _, weight in METRICS.values())
+    averaged = average_metrics()
+    total_weight = sum(weight for _, _, _, weight in averaged.values())
 
     previous_metrics: dict[str, float] = {}
     if previous_run:
@@ -266,7 +325,7 @@ def print_score(previous_run: Any | None) -> None:
             for name, m in metrics_raw.items()
         }
 
-    for name, (value, target, scale, weight) in METRICS.items():
+    for name, (value, target, scale, weight) in averaged.items():
         score = metric_score(value, target, scale)
         contribution = score * weight / total_weight
 
@@ -274,23 +333,39 @@ def print_score(previous_run: Any | None) -> None:
         color, change = compare_value(value, prev_value)
         change_str = format_change(change)
 
-        print(
-            f"  {name:>40}: {score:>6.2f}% "
-            f"(weight={weight:<03}, contribution={contribution:<04.1f}%, "
-            f"overhead={ms(value):<06}, scale={ms(scale):<06}, "
-            f"vs prev={color}{change_str}{RESET})"
-        )
+        # Detect metric-level regression (> REGRESSION_THRESHOLD worse)
+        if prev_value is not None and change is not None and change > REGRESSION_THRESHOLD * 100:
+            regressions = True
+            print(
+                f"  {RED_BG}{name:>40}: {score:>6.2f}% "
+                f"(weight={weight:<03}, contribution={contribution:<04.1f}%, "
+                f"overhead={ms(value):<06}, scale={ms(scale):<06}, "
+                f"vs prev={color}{change_str}{RESET})  REGRESSION"
+            )
+        else:
+            print(
+                f"  {name:>40}: {score:>6.2f}% "
+                f"(weight={weight:<03}, contribution={contribution:<04.1f}%, "
+                f"overhead={ms(value):<06}, scale={ms(scale):<06}, "
+                f"vs prev={color}{change_str}{RESET})"
+            )
 
     score = calculate_score()
     prev_score = previous_run.get("score") if previous_run else None
     score_color, score_change = compare_value(score, prev_score)
     score_change_str = format_change(score_change)
 
+    # Detect general score regression
+    if prev_score is not None and score_change is not None and score_change < -REGRESSION_THRESHOLD * 100:
+        regressions = True
+
     print()
     print(
         f"General score: {score_color}{score:.3f}%{RESET} "
         f"vs prev={score_color}{score_change_str}{RESET}"
     )
+
+    return regressions
 
 
 # ------------------------------------------------------------
@@ -456,9 +531,12 @@ def test_periodic_timing() -> Generator[Any, Any, Any]:
 def test_multiple_blockers() -> Generator[Any, Any, Any]:
     delays = [0.04, 0.05, 0.06, 0.07]
     observations: list[tuple[int, float, float]] = []
+
+    group = TaskGroup()
     for delay in delays:
-        yield Task(timer_probe(0, delay, observations), background=True)
-    yield Sleep(0.14)
+        group.add(Task(timer_probe(0, delay, observations), background=True), autorun=False)
+    yield group.run()
+
     check(len(observations) == len(delays), f"Only {len(observations)}/{len(delays)} completed")
     elapsed = max(ts for _, _, ts in observations)
     check(
@@ -505,9 +583,12 @@ def test_concurrent_timers() -> Generator[Any, Any, Any]:
 def test_thread_wakeups() -> Generator[Any, Any, Any]:
     observations: list[float] = []
     start = time.monotonic()
+
+    group = TaskGroup()
     for delay in (0.01, 0.02, 0.03, 0.04, 0.05):
-        yield Task(thread_probe(delay, observations), background=True)
-    yield Sleep(0.14)
+        group.add(Task(thread_probe(delay, observations), background=True), autorun=False)
+    yield group.run()
+
     check(len(observations) == 5, f"Only {len(observations)}/5 thread wakeups completed")
     delays = (0.01, 0.02, 0.03, 0.04, 0.05)
     max_lateness = max(
@@ -529,8 +610,7 @@ def test_socket_events() -> Generator[Any, Any, Any]:
     received: list[bytes] = []
     yield Task(socket_sender(right), background=True)
     yield Task(socket_reader(left, received), background=True)
-    yield Sleep(0.14)
-    check(received == [b"x"], f"Unexpected socket data: {received!r}")
+    yield from wait_until(lambda: received == [b"x"], timeout=1.0, message="socket data not received")
     left.close()
     right.close()
     report("socket events", "send + read completed")
@@ -580,9 +660,9 @@ def test_background_stop() -> Generator[Any, Any, Any]:
             events.append("stopped")
 
     task = yield Task(worker(), background=True)
-    yield Sleep(0.05)
+    yield Sleep(0.01)  # let worker start before stopping
     task.stop()
-    yield Sleep(0.03)
+    yield from wait_until(lambda: "stopped" in events, timeout=1.0, message="background task was not stopped")
     check("stopped" in events, "Background task was not stopped")
     report("background stop", "task stopped via stop()")
 
@@ -655,8 +735,7 @@ def test_mixed_message_blockers() -> Generator[Any, Any, Any]:
     yield Task(socket_sender(right), background=True)
     yield Task(socket_reader(left, received), background=True)
     yield messages
-    yield Sleep(0.14)
-    check(received == [b"x"], f"Unexpected socket data: {received!r}")
+    yield from wait_until(lambda: received == [b"x"], timeout=1.0, message="mixed blockers data not received")
     left.close()
     right.close()
     report("mixed Sleep and ToThread blockers", f"received={received!r}")
@@ -666,10 +745,8 @@ def test_socket_writable() -> Generator[Any, Any, Any]:
     left, right = socket.socketpair()
     received: list[bytes] = []
     yield Task(socket_reader(left, received), background=True)
-    yield Sleep(0.04)
     right.send(b"y")
-    yield Sleep(0.04)
-    check(received == [b"y"], f"Unexpected socket data: {received!r}")
+    yield from wait_until(lambda: received == [b"y"], timeout=1.0, message="socket writable data not received")
     left.close()
     right.close()
     report("socket writable", "writable notification received")
@@ -681,7 +758,11 @@ def test_socket_payload() -> Generator[Any, Any, Any]:
     payload = b"hello world " * 10
     yield Task(socket_sender_payload(right, 0.02, payload), background=True)
     yield Task(socket_reader_payload(left, received), background=True)
-    yield Sleep(0.14)
+    yield from wait_until(
+        lambda: len(received) > 0 and received[0][: len(payload)] == payload,
+        timeout=1.0,
+        message="socket payload not received",
+    )
     check(received[0][: len(payload)] == payload, f"Payload mismatch: {received!r}")
     left.close()
     right.close()
@@ -693,7 +774,7 @@ def test_socket_eof() -> Generator[Any, Any, Any]:
     right.close()
     received: list[bytes] = []
     yield Task(socket_reader(left, received), background=True)
-    yield Sleep(0.14)
+    yield from wait_until(lambda: len(received) > 0, timeout=1.0, message="socket EOF not received")
     left.close()
     report("socket EOF", f"EOF handled, received={received!r}")
 
@@ -706,7 +787,11 @@ def test_socket_multiple_pairs() -> Generator[Any, Any, Any]:
         yield Task(socket_sender(right), background=True)
         yield Task(socket_reader(left, received[index]), background=True)
 
-    yield Sleep(0.14)
+    yield from wait_until(
+        lambda: all(len(r) > 0 for r in received),
+        timeout=1.0,
+        message="multiple socket pairs data not received",
+    )
     for index, (left, right) in enumerate(pairs):
         check(received[index] == [b"x"], f"Pair {index}: unexpected data {received[index]!r}")
         left.close()
@@ -891,7 +976,7 @@ def test_background_parent_resumption() -> Generator[Any, Any, Any]:
     task = yield Task(delayed_background_worker(events), background=True)
     elapsed = time.monotonic() - start
     check(elapsed < 0.08, f"Parent waited for background task: {ms(elapsed)}")
-    yield Sleep(0.08)
+    yield from wait_until(lambda: task.done, timeout=1.0, message="background task did not finish")
     check(task.done, "Background task did not finish")
     check(events == ["started", "finished"], f"Unexpected background events: {events!r}")
     report("background parent resumption", f"parent resumed in {ms(elapsed)}")
@@ -1043,6 +1128,8 @@ def test_extreme_thread_pool() -> Generator[Any, Any, Any]:
 def main() -> Generator[Any, Any, Any]:
     PASSED.clear()
     METRICS.clear()
+    REPORT_COUNT.clear()
+    REPORT_DETAILS.clear()
 
     clock = time.get_clock_info("monotonic")
 
@@ -1109,19 +1196,33 @@ def main() -> Generator[Any, Any, Any]:
         test_extreme_thread_pool,
     )
 
+    repeats = 5
+
     for test in tests:
-        yield Task(test())
+        for _ in range(repeats):
+            yield Task(test())
 
     print()
-    print(f"Completed {len(PASSED)}/{len(tests)} test groups.")
+    print(f"Completed {len(PASSED)}/{len(tests)} test groups (x{repeats} repeats each).")
 
-    check(
-        len(PASSED) == len(tests),
-        f"Only {len(PASSED)}/{len(tests)} test groups passed",
-    )
+    averaged = average_metrics()
+    regressions = print_score(previous_run)
 
-    print("All tests passed.")
-    print_score(previous_run)
+    # Report failures
+    if FAILURES:
+        print()
+        print(f"{BOLD}{RED_BG}TEST FAILURES:{RESET}")
+        for failure in FAILURES:
+            print(f"  {RED_BG}{failure}{RESET}")
+
+    has_failures = len(FAILURES) > 0 or regressions
+
+    if has_failures:
+        print()
+        print(f"{BOLD}{RED_BG}OVERALL: FAILED{RESET}")
+    else:
+        print()
+        print(f"{BOLD}{GREEN_BG}OVERALL: PASSED{RESET}")
 
     if commit:
         store_run(
@@ -1129,14 +1230,18 @@ def main() -> Generator[Any, Any, Any]:
             commit,
             "local",
             calculate_score(),
-            True,
+            not has_failures,
             len(PASSED),
             len(tests),
-            METRICS,
+            averaged,
         )
+
+    return not has_failures
 
 
 from .scheduler import EEVDFScheduler
 
 if __name__ == "__main__":
-    ExecutionLoop(EEVDFScheduler).run(Yieldable(main))
+    success = ExecutionLoop(EEVDFScheduler).run(Yieldable(main))
+    import sys
+    sys.exit(0 if success else 1)

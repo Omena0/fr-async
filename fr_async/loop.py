@@ -430,14 +430,17 @@ class ExecutionLoop:
                 self.schedule(waiter)
         task._joiners.clear()
 
-    def run(self, initial: Yieldable | Task | None = None):
+    def run(self, initial: Yieldable | Task | None = None) -> bool | None:
         try:
             self.running = True
+
+            task: Task | None = None
 
             if initial is not None:
                 if isinstance(initial, Yieldable):
                     initial = initial()
 
+                task = initial
                 self.schedule(initial, initial)
 
             while self.running:
@@ -450,6 +453,7 @@ class ExecutionLoop:
                         break
                     self.poll()
 
+            return task.result if task is not None else None
         finally:
             self.shutdown()
 
