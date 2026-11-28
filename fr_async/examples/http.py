@@ -4,13 +4,11 @@ from urllib.parse import unquote_to_bytes
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any
-import traceback
 import socket
 import os
 
-from ..messages import FileRead, WaitReadable, WaitWritable
+from ..messages import WaitReadable, WaitWritable
 from ..scheduler import EEVDFScheduler
-from ..classes import File, Task
 from ..loop import ExecutionLoop
 from ..utils import server
 
